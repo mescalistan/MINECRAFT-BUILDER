@@ -4,6 +4,17 @@ import time
 import shutil
 import ctypes
 import subprocess
+
+try:
+    import PyQt6  # noqa: F401
+except ModuleNotFoundError:
+    sys.exit(
+        f"PyQt6 non e' installato per questo Python ({sys.executable}).\n"
+        "Probabilmente 'python' apre un interprete diverso da quello usato da 'pip'.\n"
+        "Avvia l'app con:  avvia.bat   oppure   py -3 main.py\n"
+        "(per installare le dipendenze:  py -3 -m pip install -r requirements.txt)"
+    )
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QListWidget, QListWidgetItem,

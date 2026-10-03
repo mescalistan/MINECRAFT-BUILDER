@@ -35,7 +35,7 @@
   - Luce e heightmap dei chunk modificati invalidate: Minecraft le ricalcola al caricamento.
   - I chunk non generati vengono saltati (mai creati vuoti) e i blocchi di mod vengono saltati nei mondi vanilla.
   - Rilevamento dello stato di blocco del mondo (`session.lock`) per prevenire corruzioni di dati.
-  - Elevazione a Amministratore (UAC) solo su richiesta con `python main.py --admin`.
+  - Elevazione a Amministratore (UAC) solo su richiesta con `py -3 main.py --admin`.
   - Console di log high-tech con colorazione sintattica HTML delle operazioni.
 
 ---
@@ -60,9 +60,16 @@
    ```
 
 3. Avvia l'applicazione:
-   ```bash
-   python main.py
-   ```
+   - **Windows**: doppio clic su `avvia.bat` (installa le dipendenze al primo avvio), oppure
+     ```bash
+     py -3 main.py
+     ```
+   - **Altri sistemi**:
+     ```bash
+     python3 main.py
+     ```
+
+   > Se compare `No module named 'PyQt6'`, il comando `python` sta aprendo un interprete diverso da quello in cui `pip` ha installato le dipendenze (ad esempio un Python di MSYS2 nel PATH). Usa `avvia.bat` o `py -3 main.py`.
 
 ---
 
