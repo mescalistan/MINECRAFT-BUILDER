@@ -44,7 +44,7 @@
 
 1. Clona il repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/MINECRAFT-BUILDER.git
+   git clone https://github.com/mescalistan/MINECRAFT-BUILDER.git
    cd MINECRAFT-BUILDER
    ```
 
