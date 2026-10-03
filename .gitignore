@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Minecraft World saves and local region backups
+saves/
+backups/
+*.bak
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDEs & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
