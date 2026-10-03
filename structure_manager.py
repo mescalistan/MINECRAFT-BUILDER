@@ -1,12 +1,30 @@
 import os
-from nbt_codec import load_nbt, TAG_Compound, TAG_List, TAG_Int
+from nbt_codec import load_nbt
+
+# DataVersion of 1.13 ("The Flattening"): older files use block names that no longer exist
+DATA_VERSION_FLATTENING = 1451
+
 
 class Structure:
-    def __init__(self, width=0, height=0, length=0, blocks=None):
+    def __init__(self, width=0, height=0, length=0, blocks=None, data_version=None):
         self.width = width      # X
         self.height = height    # Y
         self.length = length    # Z
         self.blocks = blocks or {}  # Maps (x, y, z) -> {"Name": name, "Properties": props}
+        self.data_version = data_version
+
+    def modded_blocks(self):
+        """Counts blocks that do not belong to the minecraft: namespace, per namespace."""
+        counts = {}
+        for block in self.blocks.values():
+            name = block.get("Name", "minecraft:air")
+            ns = name.split(":", 1)[0] if ":" in name else "minecraft"
+            if ns != "minecraft":
+                counts[ns] = counts.get(ns, 0) + 1
+        return counts
+
+    def is_pre_flattening(self):
+        return self.data_version is not None and self.data_version < DATA_VERSION_FLATTENING
 
     def get_block(self, x, y, z):
         return self.blocks.get((x, y, z), {"Name": "minecraft:air", "Properties": {}})
@@ -55,7 +73,7 @@ class Structure:
                 "Properties": rotated_props
             }
             
-        return Structure(new_w, new_h, new_l, new_blocks)
+        return Structure(new_w, new_h, new_l, new_blocks, self.data_version)
 
     @classmethod
     def load(cls, file_path):
@@ -114,7 +132,8 @@ class Structure:
                     "Properties": properties
                 }
                 
-        return cls(w, h, l, blocks)
+        dv = tag.get("DataVersion")
+        return cls(w, h, l, blocks, int(dv) if dv is not None else None)
 
     @classmethod
     def _load_schem(cls, file_path):
@@ -161,8 +180,9 @@ class Structure:
                             block = palette[state_idx]
                             if block["Name"] != "minecraft:air":
                                 blocks[(x, y, z)] = block
-                                
-        return cls(w, h, l, blocks)
+
+        dv = tag.get("DataVersion")
+        return cls(w, h, l, blocks, int(dv) if dv is not None else None)
 
     @classmethod
     def _load_mcedit_schematic(cls, tag):
@@ -204,7 +224,8 @@ class Structure:
                                 "Properties": {}
                             }
                             
-        return cls(w, h, l, blocks)
+        # Legacy numeric IDs are already converted to modern names above
+        return cls(w, h, l, blocks, data_version=None)
 
 
 def read_varint(data, offset):
@@ -241,31 +262,65 @@ def parse_block_state_str(bs_str):
         return {"Name": name, "Properties": {}}
 
 
+_CW = {"north": "east", "east": "south", "south": "west", "west": "north"}
+
+# Rail shapes after one clockwise step
+_RAIL_CW = {
+    "north_south": "east_west", "east_west": "north_south",
+    "ascending_north": "ascending_east", "ascending_east": "ascending_south",
+    "ascending_south": "ascending_west", "ascending_west": "ascending_north",
+    "north_east": "south_east", "south_east": "south_west",
+    "south_west": "north_west", "north_west": "north_east",
+}
+
+
+def _rotate_dir(val, steps):
+    for _ in range(steps):
+        val = _CW.get(val, val)
+    return val
+
+
 def rotate_properties(properties, angle):
+    """Rotates block state properties clockwise by 90/180/270 degrees."""
+    steps = (angle // 90) % 4
     new_props = dict(properties)
-    steps = angle // 90
-    
-    facing_rotations_cw = {
-        "north": "east",
-        "east": "south",
-        "south": "west",
-        "west": "north"
-    }
-    
+    if steps == 0 or not properties:
+        return new_props
+
+    # facing (up/down are unchanged)
     if "facing" in new_props:
-        val = new_props["facing"]
-        # Rotate 'facing' for block states
-        for _ in range(steps):
-            val = facing_rotations_cw.get(val, val)
-        new_props["facing"] = val
-        
+        new_props["facing"] = _rotate_dir(new_props["facing"], steps)
+
+    # Connection properties of fences, panes, walls, vines, redstone wire,
+    # mushroom blocks, glow lichen...: move each value to the rotated side
+    sides = [d for d in ("north", "east", "south", "west") if d in properties]
+    for d in sides:
+        new_props.pop(d)
+    for d in sides:
+        new_props[_rotate_dir(d, steps)] = properties[d]
+
     if "axis" in new_props and steps % 2 == 1:
-        val = new_props["axis"]
-        if val == "x":
-            new_props["axis"] = "z"
-        elif val == "z":
-            new_props["axis"] = "x"
-            
+        new_props["axis"] = {"x": "z", "z": "x"}.get(new_props["axis"], new_props["axis"])
+
+    # Signs, banners, heads: 16 rotation steps, 4 per quarter turn
+    if "rotation" in new_props:
+        try:
+            new_props["rotation"] = str((int(new_props["rotation"]) + 4 * steps) % 16)
+        except ValueError:
+            pass
+
+    # Rails (stairs shapes like inner_left are relative to facing and stay unchanged)
+    if new_props.get("shape") in _RAIL_CW:
+        val = new_props["shape"]
+        for _ in range(steps):
+            val = _RAIL_CW[val]
+        new_props["shape"] = val
+
+    # Jigsaw / crafter orientation, e.g. "north_up" or "up_east"
+    if "orientation" in new_props:
+        parts = new_props["orientation"].split("_")
+        new_props["orientation"] = "_".join(_rotate_dir(p, steps) for p in parts)
+
     return new_props
 
 

@@ -13,9 +13,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QFont, QIcon, QColor
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 
-from nbt_codec import load_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String
-from mca_codec import MCARegion, set_block, recalculate_heightmaps
+from nbt_codec import load_nbt
+from mca_codec import MCARegion, UnsupportedChunkFormat
 from structure_manager import Structure
+from world_editor import World, inject_structures
 from map_viewer import MapViewer
 from scraper import search_minecraft_schematics, download_structure, CURATED_ONLINE_CATALOG
 
@@ -215,15 +216,6 @@ QCheckBox::indicator:disabled {
 }
 """
 
-def init_empty_chunk(rx, rz, cx, cz):
-    chunk = TAG_Compound()
-    chunk["Status"] = TAG_String("full")
-    chunk["xPos"] = TAG_Int(rx * 32 + cx)
-    chunk["zPos"] = TAG_Int(rz * 32 + cz)
-    chunk["sections"] = TAG_List(10)
-    chunk["DataVersion"] = TAG_Int(3084)  # Minecraft 1.19 standard
-    return chunk
-
 class InjectionWorker(QThread):
     # Signals
     progress = pyqtSignal(str)
@@ -231,211 +223,47 @@ class InjectionWorker(QThread):
     error = pyqtSignal(str)
     permission_error = pyqtSignal(str)
 
-    def __init__(self, current_region, placements_to_inject, y_spinbox_value, rx, rz, fill_foundations=True, clear_terrain=True):
+    def __init__(self, world, placements_to_inject, fill_foundations=True, clear_terrain=True, skip_modded=True):
         super().__init__()
-        self.current_region = current_region
+        self.world = world
         self.placements_to_inject = placements_to_inject
-        self.y_spinbox_value = y_spinbox_value
-        self.rx = rx
-        self.rz = rz
         self.fill_foundations = fill_foundations
         self.clear_terrain = clear_terrain
-
-    def get_terrain_height(self, gx, gz):
-        cx = gx // 16
-        cz = gz // 16
-        bx_local = gx % 16
-        bz_local = gz % 16
-        chunk_key = (cx, cz)
-        if chunk_key not in self.current_region.chunks:
-            return 62
-        chunk_nbt, _ = self.current_region.chunks[chunk_key]
-        
-        # 1. Try WORLD_SURFACE heightmap first
-        if "Heightmaps" in chunk_nbt:
-            hm = chunk_nbt["Heightmaps"]
-            if "WORLD_SURFACE" in hm:
-                ws = hm["WORLD_SURFACE"]
-                index = bz_local * 16 + bx_local
-                B = 9
-                V = 7
-                long_idx = index // V
-                if long_idx < len(ws):
-                    bit_offset = (index % V) * B
-                    val = (ws[long_idx] >> bit_offset) & 0x1FF
-                    return val - 64
-                    
-        # 2. Optimized fallback scanning Down
-        sections = chunk_nbt.get("sections", [])
-        if not sections:
-            return 62
-        sec_dict = {}
-        for sec in sections:
-            sec_dict[int(sec.get("Y", 0))] = sec
-        for sy in sorted(sec_dict.keys(), reverse=True):
-            sec = sec_dict[sy]
-            if "block_states" not in sec:
-                continue
-            palette = sec["block_states"].get("palette", [])
-            if not palette:
-                continue
-            if all(b.get("Name", "minecraft:air") == "minecraft:air" or "water" in b.get("Name", "") for b in palette):
-                continue
-            blocks = unpack_section(sec)
-            for by in range(15, -1, -1):
-                b_idx = by * 256 + bz_local * 16 + bx_local
-                b_name = blocks[b_idx].get("Name", "minecraft:air")
-                if b_name != "minecraft:air" and "water" not in b_name:
-                    return sy * 16 + by
-        return 62
-
-    def get_world_block(self, gx, gy, gz):
-        cx = gx // 16
-        cz = gz // 16
-        bx_local = gx % 16
-        bz_local = gz % 16
-        chunk_key = (cx, cz)
-        if chunk_key not in self.current_region.chunks:
-            return {"Name": "minecraft:air"}
-        chunk_nbt, _ = self.current_region.chunks[chunk_key]
-        sections = chunk_nbt.get("sections", [])
-        sy = gy // 16
-        for sec in sections:
-            if int(sec.get("Y", 0)) == sy:
-                blocks = unpack_section(sec)
-                b_idx = (gy % 16) * 256 + bz_local * 16 + bx_local
-                return blocks[b_idx]
-        return {"Name": "minecraft:air"}
-
-    def get_biome_blocks(self, surface_block_name):
-        s_name = surface_block_name.lower()
-        if "grass_block" in s_name:
-            return "minecraft:grass_block", "minecraft:dirt"
-        elif "red_sand" in s_name:
-            return "minecraft:red_sand", "minecraft:red_sandstone"
-        elif "sand" in s_name:
-            return "minecraft:sand", "minecraft:sandstone"
-        elif "stone" in s_name or "deepslate" in s_name or "andesite" in s_name or "diorite" in s_name or "granite" in s_name:
-            return "minecraft:stone", "minecraft:stone"
-        elif "snow" in s_name:
-            return "minecraft:snow_block", "minecraft:dirt"
-        elif "podzol" in s_name:
-            return "minecraft:podzol", "minecraft:dirt"
-        elif "mycelium" in s_name:
-            return "minecraft:mycelium", "minecraft:dirt"
-        return "minecraft:grass_block", "minecraft:dirt"
+        self.skip_modded = skip_modded
 
     def run(self):
         try:
-            modified_chunks = set()
-            for item in self.placements_to_inject:
-                struct = item["structure"]
-                grid_x = item["grid_x"]
-                grid_z = item["grid_z"]
-                y_coord = item["y_coord"]
-                name = item["name"]
-                
-                self.progress.emit(f"Iniezione {name} a X: {self.rx*512 + grid_x}, Y: {y_coord}, Z: {self.rz*512 + grid_z}...")
-                
-                # Precalculate footprint bottom Y coordinates
-                columns_bottom = {}
-                for (bx, by, bz), block in struct.blocks.items():
-                    b_name = block.get("Name", "minecraft:air")
-                    if b_name != "minecraft:air":
-                        if (bx, bz) not in columns_bottom or by < columns_bottom[(bx, bz)]:
-                            columns_bottom[(bx, bz)] = by
+            t0 = time.perf_counter()
+            stats = inject_structures(
+                self.world,
+                self.placements_to_inject,
+                fill_foundations=self.fill_foundations,
+                clear_terrain=self.clear_terrain,
+                skip_modded=self.skip_modded,
+                log=self.progress.emit,
+            )
+            self.progress.emit(
+                f"Blocchi piazzati: {stats['placed']}, scavati: {stats['cleared']}, fondamenta: {stats['foundation']}"
+            )
+            if stats["skipped_missing"]:
+                reasons = sorted(set(self.world.skipped_chunks.values()))
+                self.progress.emit(
+                    f"Avviso: {stats['skipped_missing']} blocchi saltati in {len(self.world.skipped_chunks)} chunk "
+                    f"({', '.join(reasons)}). Esplora l'area in gioco e riprova."
+                )
+            if stats["skipped_modded"]:
+                self.progress.emit(f"Avviso: {stats['skipped_modded']} blocchi di mod saltati.")
+            if stats["skipped_height"]:
+                self.progress.emit(f"Avviso: {stats['skipped_height']} blocchi fuori dai limiti di altezza del mondo.")
 
-                processed_foundations = set()
-
-                for (bx, by, bz), block in struct.blocks.items():
-                    gx = grid_x + bx
-                    gy = y_coord + by
-                    gz = grid_z + bz
-                    
-                    if not (0 <= gx < 512 and 0 <= gz < 512):
-                        continue
-                        
-                    cx = gx // 16
-                    cz = gz // 16
-                    bx_local = gx % 16
-                    bz_local = gz % 16
-                    
-                    chunk_key = (cx, cz)
-                    if chunk_key not in self.current_region.chunks:
-                        self.current_region.chunks[chunk_key] = (init_empty_chunk(self.rx, self.rz, cx, cz), int(time.time()))
-                        
-                    chunk_nbt, ts = self.current_region.chunks[chunk_key]
-                    modified_chunks.add(chunk_key)
-
-                    # Clear terrain (Air clearance)
-                    b_name = block.get("Name", "minecraft:air")
-                    if b_name == "minecraft:air":
-                        if self.clear_terrain:
-                            terrain_y = self.get_terrain_height(gx, gz)
-                            if gy <= terrain_y:
-                                air_state = TAG_Compound()
-                                air_state["Name"] = TAG_String("minecraft:air")
-                                set_block(chunk_nbt, bx_local, gy, bz_local, air_state)
-                        continue
-
-                    # Convert block state to chunk NBT format
-                    block_state = TAG_Compound()
-                    block_state["Name"] = TAG_String(block["Name"])
-                    if block.get("Properties"):
-                        props = TAG_Compound()
-                        for pk, pv in block["Properties"].items():
-                            props[pk] = TAG_String(pv)
-                        block_state["Properties"] = props
-                        
-                    set_block(chunk_nbt, bx_local, gy, bz_local, block_state)
-
-                    # Fill foundations downward
-                    if self.fill_foundations and (bx, bz) not in processed_foundations:
-                         processed_foundations.add((bx, bz))
-                         struct_y_bot = columns_bottom[(bx, bz)]
-                         world_y_bot = y_coord + struct_y_bot
-                         terrain_y = self.get_terrain_height(gx, gz)
-                         
-                         if world_y_bot > terrain_y:
-                             surface_block_state = self.get_world_block(gx, terrain_y, gz)
-                             surf_name, sub_name = self.get_biome_blocks(surface_block_state.get("Name", "minecraft:grass_block"))
-                             
-                             surf_state = TAG_Compound()
-                             surf_state["Name"] = TAG_String(surf_name)
-                             
-                             sub_state = TAG_Compound()
-                             sub_state["Name"] = TAG_String(sub_name)
-                             
-                             # Fill column blocks
-                             for fill_y in range(terrain_y, world_y_bot):
-                                 state_to_set = surf_state if fill_y == world_y_bot - 1 else sub_state
-                                 fill_cx = gx // 16
-                                 fill_cz = gz // 16
-                                 fill_bx_local = gx % 16
-                                 fill_bz_local = gz % 16
-                                 fill_chunk_key = (fill_cx, fill_cz)
-                                 
-                                 if fill_chunk_key not in self.current_region.chunks:
-                                     self.current_region.chunks[fill_chunk_key] = (init_empty_chunk(self.rx, self.rz, fill_cx, fill_cz), int(time.time()))
-                                     
-                                 fill_chunk_nbt, _ = self.current_region.chunks[fill_chunk_key]
-                                 modified_chunks.add(fill_chunk_key)
-                                 set_block(fill_chunk_nbt, fill_bx_local, fill_y, fill_bz_local, state_to_set)
-                    
-            # Recalculate heightmaps
-            self.progress.emit("Ricalcolo heightmaps dei chunk modificati...")
-            for chunk_key in modified_chunks:
-                chunk_nbt, ts = self.current_region.chunks[chunk_key]
-                recalculate_heightmaps(chunk_nbt)
-                self.current_region.chunks[chunk_key] = (chunk_nbt, int(time.time()))
-                
-            # Save MCA file
-            self.progress.emit("Scrittura del file di regione .mca modificato...")
-            self.current_region.save()
-            
+            self.progress.emit("Scrittura dei file di regione modificati...")
+            self.world.save(backup=True, log=self.progress.emit)
+            self.progress.emit(f"Operazione completata in {time.perf_counter() - t0:.1f} s.")
             self.success.emit()
         except PermissionError as pe:
             self.permission_error.emit(str(pe))
+        except UnsupportedChunkFormat as e:
+            self.error.emit(str(e))
         except Exception as e:
             import traceback
             err_msg = f"{e}\n{traceback.format_exc()}"
@@ -601,6 +429,7 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer = MapViewer()
         self.map_viewer.hover_changed.connect(self.update_hover_coordinates)
         self.map_viewer.structure_placed.connect(self.lock_placement_coordinate)
+        self.map_viewer.rotate_requested.connect(self.rotate_current_structure)
         center_layout.addWidget(self.map_viewer)
         
         # Coordinates status bar at bottom
@@ -655,7 +484,14 @@ class MinecraftBuilderApp(QMainWindow):
         self.clear_terrain_checkbox = QCheckBox("Scava ostacoli di terreno (Aria)")
         self.clear_terrain_checkbox.setChecked(True)
         inspector_layout.addWidget(self.clear_terrain_checkbox)
-        
+
+        self.skip_modded_checkbox = QCheckBox("Salta blocchi di mod (mondo vanilla)")
+        self.skip_modded_checkbox.setChecked(True)
+        self.skip_modded_checkbox.setToolTip(
+            "In un mondo senza mod, un blocco sconosciuto fa scartare al gioco l'intera sezione 16x16x16."
+        )
+        inspector_layout.addWidget(self.skip_modded_checkbox)
+
         # Suggest Position Button
         self.suggest_pos_btn = QPushButton("Consiglia Posizione Ottimale")
         self.suggest_pos_btn.setEnabled(False)
@@ -790,15 +626,20 @@ class MinecraftBuilderApp(QMainWindow):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(50, self.go_to_player_region)
 
+    def get_region_dir(self):
+        if not self.current_world_path:
+            return None
+        region_dir = os.path.join(self.current_world_path, "region")
+        if not os.path.exists(region_dir):
+            region_dir = os.path.join(self.current_world_path, "dimensions", "minecraft", "overworld", "region")
+        return region_dir
+
     def scan_regions(self):
         self.region_select.clear()
         if not self.current_world_path:
             return
-            
-        region_dir = os.path.join(self.current_world_path, "region")
-        if not os.path.exists(region_dir):
-            region_dir = os.path.join(self.current_world_path, "dimensions", "minecraft", "overworld", "region")
-            
+
+        region_dir = self.get_region_dir()
         if not os.path.exists(region_dir):
             world_name = os.path.basename(self.current_world_path)
             self.log(f"Cartella 'region' non trovata in {world_name}!")
@@ -817,11 +658,7 @@ class MinecraftBuilderApp(QMainWindow):
             self.map_viewer.set_region(None)
             return
             
-        region_dir = os.path.join(self.current_world_path, "region")
-        if not os.path.exists(region_dir):
-            region_dir = os.path.join(self.current_world_path, "dimensions", "minecraft", "overworld", "region")
-            
-        region_path = os.path.join(region_dir, region_file)
+        region_path = os.path.join(self.get_region_dir(), region_file)
         self.log(f"Caricamento regione {region_file}...")
         
         try:
@@ -1026,18 +863,18 @@ class MinecraftBuilderApp(QMainWindow):
             self.selected_structure_name = name
             self.map_viewer.set_selected_structure(self.selected_structure)
             
-            # Show details in inspector
-            info = (
-                f"<b>Nome:</b> {name}<br>"
-                f"<b>Larghezza (X):</b> {self.selected_structure.width}<br>"
-                f"<b>Altezza (Y):</b> {self.selected_structure.height}<br>"
-                f"<b>Lunghezza (Z):</b> {self.selected_structure.length}<br>"
-                f"<b>Blocchi totali:</b> {len(self.selected_structure.blocks)}<br>"
-                f"<b>Formato:</b> {os.path.splitext(name)[1].upper()}"
-            )
-            self.struct_info_box.setText(info)
+            self.update_structure_info()
             self.log(f"Caricata struttura {name} ({self.selected_structure.width}x{self.selected_structure.length}). R per ruotare.")
-            
+
+            modded = self.selected_structure.modded_blocks()
+            if modded:
+                total = sum(modded.values())
+                self.log(f"Avviso: {total} blocchi di mod ({', '.join(sorted(modded))}). "
+                         f"In un mondo vanilla verranno saltati.")
+            if self.selected_structure.is_pre_flattening():
+                self.log(f"Errore: {name} usa il formato pre-1.13 (DataVersion {self.selected_structure.data_version}) "
+                         f"e non puo' essere iniettato. Caricalo con uno structure block e risalvalo.")
+
             # Update check box status
             self.check_injection_readiness()
         except Exception as e:
@@ -1133,7 +970,8 @@ class MinecraftBuilderApp(QMainWindow):
                 avg_h = self.get_average_footprint_height(grid_x, grid_z)
                 self.y_spinbox.setValue(avg_h)
             else:
-                self.y_spinbox.setValue(height_y)
+                # The structure's first layer goes on the block above the terrain
+                self.y_spinbox.setValue(height_y + 1)
 
     def lock_placement_coordinate(self, grid_x, grid_z):
         self.locked_placement = (grid_x, grid_z)
@@ -1147,9 +985,9 @@ class MinecraftBuilderApp(QMainWindow):
             bx = grid_x % 16
             bz = grid_z % 16
             
-            heights = self.map_viewer.get_chunk_heightmap(cx, cz)
+            heights = self.map_viewer.get_chunk_heightmap(cx, cz) if 0 <= grid_x < 512 and 0 <= grid_z < 512 else None
             if heights:
-                self.y_spinbox.setValue(heights[bz * 16 + bx])
+                self.y_spinbox.setValue(heights[bz * 16 + bx] + 1)
             
         world_x = self.current_region.rx * 512 + grid_x
         world_z = self.current_region.rz * 512 + grid_z
@@ -1166,7 +1004,9 @@ class MinecraftBuilderApp(QMainWindow):
         
         # Create a display name
         s_name = self.selected_structure_name
-        display_name = f"{s_name} ({grid_x}, {y_val}, {grid_z})"
+        item_x = self.current_region.rx * 512 + grid_x
+        item_z = self.current_region.rz * 512 + grid_z
+        display_name = f"{s_name} ({item_x}, {y_val}, {item_z})"
         
         # Copy the structure object so it is frozen in its current state
         import copy
@@ -1174,8 +1014,8 @@ class MinecraftBuilderApp(QMainWindow):
         
         item_data = {
             "structure": structure_copy,
-            "grid_x": grid_x,
-            "grid_z": grid_z,
+            "world_x": item_x,
+            "world_z": item_z,
             "y_coord": y_val,
             "name": s_name,
             "preview_pixmap": self.map_viewer.structure_preview_pixmap
@@ -1250,6 +1090,7 @@ class MinecraftBuilderApp(QMainWindow):
             self.suggest_pos_btn.setEnabled(self.current_region is not None and self.selected_structure is not None)
 
     def get_average_footprint_height(self, grid_x, grid_z):
+        """Suggested Y for the structure's first layer: one above the average terrain top."""
         if not self.current_region or not self.selected_structure or not hasattr(self.map_viewer, 'region_heights'):
             return 64
         sw = self.selected_structure.width
@@ -1265,7 +1106,7 @@ class MinecraftBuilderApp(QMainWindow):
                     total_height += self.map_viewer.region_heights[gz][gx]
                     count += 1
         if count > 0:
-            return int(round(total_height / count))
+            return int(round(total_height / count)) + 1
         return 64
 
     def suggest_optimal_position(self):
@@ -1311,7 +1152,7 @@ class MinecraftBuilderApp(QMainWindow):
                 score = variance + (dist * 0.05)
                 
                 # Avoid water or extreme heights
-                avg_h = int(round(avg))
+                avg_h = int(round(avg)) + 1
                 if avg_h < 60:
                     score += 500  # ocean penalty
                 elif avg_h > 150:
@@ -1341,21 +1182,32 @@ class MinecraftBuilderApp(QMainWindow):
         
         self.log(f"Posizione ottimale trovata a X: {self.current_region.rx * 512 + best_gx}, Z: {self.current_region.rz * 512 + best_gz} (Altezza media consigliata: Y: {avg_h}).")
 
+    def update_structure_info(self):
+        s = self.selected_structure
+        if not s:
+            return
+        modded = s.modded_blocks()
+        info = (
+            f"<b>Nome:</b> {self.selected_structure_name}<br>"
+            f"<b>Larghezza (X):</b> {s.width}<br>"
+            f"<b>Altezza (Y):</b> {s.height}<br>"
+            f"<b>Lunghezza (Z):</b> {s.length}<br>"
+            f"<b>Blocchi totali:</b> {len(s.blocks)}<br>"
+            f"<b>Formato:</b> {os.path.splitext(self.selected_structure_name)[1].upper()}"
+        )
+        if s.data_version is not None:
+            info += f"<br><b>DataVersion:</b> {s.data_version}"
+        if modded:
+            info += f"<br><span style='color:#e67e22;'><b>Blocchi di mod:</b> {sum(modded.values())} ({', '.join(sorted(modded))})</span>"
+        self.struct_info_box.setText(info)
+
     def rotate_current_structure(self):
         if self.selected_structure:
             self.selected_structure = self.selected_structure.rotate(90)
-            self.map_viewer.set_selected_structure(self.selected_structure)
+            # Keep the locked position: rotating should not move the placement
+            self.map_viewer.set_selected_structure(self.selected_structure, keep_lock=self.locked_placement is not None)
             self.log("Struttura ruotata di 90° in senso orario.")
-            # Update dimensions text in UI
-            info = (
-                f"<b>Nome:</b> {self.selected_structure_name}<br>"
-                f"<b>Larghezza (X):</b> {self.selected_structure.width}<br>"
-                f"<b>Altezza (Y):</b> {self.selected_structure.height}<br>"
-                f"<b>Lunghezza (Z):</b> {self.selected_structure.length}<br>"
-                f"<b>Blocchi totali:</b> {len(self.selected_structure.blocks)}<br>"
-                f"<b>Formato:</b> {os.path.splitext(self.selected_structure_name)[1].upper()}"
-            )
-            self.struct_info_box.setText(info)
+            self.update_structure_info()
 
     def apply_structure_to_world(self):
         if not self.current_region:
@@ -1402,8 +1254,8 @@ class MinecraftBuilderApp(QMainWindow):
             y_coord = self.y_spinbox.value()
             placements_to_inject = [{
                 "structure": self.selected_structure,
-                "grid_x": grid_x,
-                "grid_z": grid_z,
+                "world_x": self.current_region.rx * 512 + grid_x,
+                "world_z": self.current_region.rz * 512 + grid_z,
                 "y_coord": y_coord,
                 "name": self.selected_structure_name
             }]
@@ -1412,14 +1264,18 @@ class MinecraftBuilderApp(QMainWindow):
             self.log("Nessuna struttura posizionata o in coda da iniettare.")
             return
             
-        # Confirm dialogue could be skipped, print direct backup log
-        self.log("Creazione backup di sicurezza...")
-        backup_path = self.current_region.create_backup()
-        if backup_path:
-            self.log(f"Backup creato in: {os.path.basename(backup_path)}")
-        else:
-            self.log("Avviso: Impossibile creare il file di backup.")
-            
+        old_format = [p["name"] for p in placements_to_inject if p["structure"].is_pre_flattening()]
+        if old_format:
+            QMessageBox.critical(
+                self, "Formato non supportato",
+                "Queste strutture usano il formato pre-1.13 e i loro blocchi non esistono piu' nel gioco:\n\n"
+                + "\n".join(old_format)
+                + "\n\nCaricale con uno structure block in Minecraft e risalvale prima di iniettarle."
+            )
+            return
+
+        # The backup of every modified region is made by World.save()
+
         self.log(f"Iniezione di {len(placements_to_inject)} strutture avviata in background...")
         
         # Disable UI during thread run
@@ -1430,17 +1286,16 @@ class MinecraftBuilderApp(QMainWindow):
         self.clear_staged_btn.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         
-        rx, rz = self.current_region.rx, self.current_region.rz
-        
+        # Structures crossing the region border are written to the neighbouring regions too
+        world = World(self.get_region_dir(), preloaded=[self.current_region])
+
         # Instantiate and start the worker thread
         self.injection_thread = InjectionWorker(
-            self.current_region, 
-            placements_to_inject, 
-            self.y_spinbox.value(), 
-            rx, 
-            rz,
+            world,
+            placements_to_inject,
             fill_foundations=self.fill_foundation_checkbox.isChecked(),
-            clear_terrain=self.clear_terrain_checkbox.isChecked()
+            clear_terrain=self.clear_terrain_checkbox.isChecked(),
+            skip_modded=self.skip_modded_checkbox.isChecked()
         )
         self.injection_thread.progress.connect(self.log)
         self.injection_thread.success.connect(self.on_injection_success)
@@ -1517,9 +1372,11 @@ def run_as_admin():
 
 
 def main():
-    if sys.platform == "win32":
+    # Administrator rights are not needed to edit saves in %APPDATA%: elevate only on request
+    if sys.platform == "win32" and "--admin" in sys.argv:
+        sys.argv.remove("--admin")
         run_as_admin()
-        
+
     app = QApplication(sys.argv)
     window = MinecraftBuilderApp()
     window.show()

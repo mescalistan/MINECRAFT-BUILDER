@@ -58,115 +58,112 @@ class TAG_Long_Array(list):
     tag_type = 12
 
 
-def read_byte(f):
-    return struct.unpack('>b', f.read(1))[0]
+# Pre-compiled struct formats (big endian)
+_B = struct.Struct('>b')
+_UB = struct.Struct('>B')
+_H = struct.Struct('>h')
+_UH = struct.Struct('>H')
+_I = struct.Struct('>i')
+_Q = struct.Struct('>q')
+_F = struct.Struct('>f')
+_D = struct.Struct('>d')
 
-def read_ubyte(f):
-    return struct.unpack('>B', f.read(1))[0]
 
-def read_short(f):
-    return struct.unpack('>h', f.read(2))[0]
+# ---------------------------------------------------------------------------
+# Reading: the parser works on an in-memory buffer with an explicit offset,
+# which is much faster than many small file.read() calls.
+# ---------------------------------------------------------------------------
 
-def read_ushort(f):
-    return struct.unpack('>H', f.read(2))[0]
+# Tag names and short string values repeat a lot (block names, "Name", "Properties"...):
+# decoded strings are cached by their raw bytes.
+_STR_CACHE = {}
+_STR_CACHE_MAX = 8192
 
-def read_int(f):
-    return struct.unpack('>i', f.read(4))[0]
 
-def read_long(f):
-    return struct.unpack('>q', f.read(8))[0]
+def _read_string(buf, pos):
+    end = pos + 2 + ((buf[pos] << 8) | buf[pos + 1])
+    raw = buf[pos + 2:end]
+    s = _STR_CACHE.get(raw)
+    if s is None:
+        s = TAG_String(raw.decode('utf-8', errors='replace'))
+        if len(raw) <= 64 and len(_STR_CACHE) < _STR_CACHE_MAX:
+            _STR_CACHE[raw] = s
+    return s, end
 
-def read_float(f):
-    return struct.unpack('>f', f.read(4))[0]
 
-def read_double(f):
-    return struct.unpack('>d', f.read(8))[0]
+def _read_payload(buf, pos, tag_type):
+    if tag_type == 10:
+        comp = TAG_Compound()
+        while True:
+            t_type = buf[pos]
+            if t_type == 0:
+                return comp, pos + 1
+            t_name, pos = _read_string(buf, pos + 1)
+            comp[t_name], pos = _read_payload(buf, pos, t_type)
+    if tag_type == 8:
+        return _read_string(buf, pos)
+    if tag_type == 1:
+        return TAG_Byte(_B.unpack_from(buf, pos)[0]), pos + 1
+    if tag_type == 3:
+        return TAG_Int(_I.unpack_from(buf, pos)[0]), pos + 4
+    if tag_type == 9:
+        item_type = buf[pos]
+        length = _I.unpack_from(buf, pos + 1)[0]
+        pos += 5
+        lst = TAG_List(item_type)
+        append = lst.append
+        for _ in range(max(0, length)):
+            val, pos = _read_payload(buf, pos, item_type)
+            append(val)
+        return lst, pos
+    if tag_type == 12:
+        length = _I.unpack_from(buf, pos)[0]
+        pos += 4
+        return TAG_Long_Array(struct.unpack_from(f'>{length}q', buf, pos)), pos + length * 8
+    if tag_type == 2:
+        return TAG_Short(_H.unpack_from(buf, pos)[0]), pos + 2
+    if tag_type == 4:
+        return TAG_Long(_Q.unpack_from(buf, pos)[0]), pos + 8
+    if tag_type == 5:
+        return TAG_Float(_F.unpack_from(buf, pos)[0]), pos + 4
+    if tag_type == 6:
+        return TAG_Double(_D.unpack_from(buf, pos)[0]), pos + 8
+    if tag_type == 7:
+        length = _I.unpack_from(buf, pos)[0]
+        pos += 4
+        return TAG_Byte_Array(buf[pos:pos + length]), pos + length
+    if tag_type == 11:
+        length = _I.unpack_from(buf, pos)[0]
+        pos += 4
+        return TAG_Int_Array(struct.unpack_from(f'>{length}i', buf, pos)), pos + length * 4
+    if tag_type == 0:
+        return None, pos
+    raise ValueError(f"Unknown tag type {tag_type}")
 
-def read_string(f):
-    length = read_ushort(f)
-    if length == 0:
-        return ""
-    return f.read(length).decode('utf-8', errors='replace')
+
+def parse_nbt_bytes(data):
+    """Parses an uncompressed NBT document. Returns (root_tag, root_name)."""
+    data = bytes(data)
+    if not data or data[0] == 0:
+        return None, ""
+    t_type = data[0]
+    name, pos = _read_string(data, 1)
+    val, _ = _read_payload(data, pos, t_type)
+    return val, str(name)
 
 
 def read_tag(f, tag_type):
-    if tag_type == 0: # END
-        return None
-    elif tag_type == 1:
-        return TAG_Byte(struct.unpack('>b', f.read(1))[0])
-    elif tag_type == 2:
-        return TAG_Short(struct.unpack('>h', f.read(2))[0])
-    elif tag_type == 3:
-        return TAG_Int(struct.unpack('>i', f.read(4))[0])
-    elif tag_type == 4:
-        return TAG_Long(struct.unpack('>q', f.read(8))[0])
-    elif tag_type == 5:
-        return TAG_Float(struct.unpack('>f', f.read(4))[0])
-    elif tag_type == 6:
-        return TAG_Double(struct.unpack('>d', f.read(8))[0])
-    elif tag_type == 7:
-        length = read_int(f)
-        return TAG_Byte_Array(f.read(length))
-    elif tag_type == 8:
-        return TAG_String(read_string(f))
-    elif tag_type == 9:
-        item_type = read_ubyte(f)
-        length = read_int(f)
-        lst = TAG_List(item_type)
-        for _ in range(length):
-            lst.append(read_tag(f, item_type))
-        return lst
-    elif tag_type == 10:
-        comp = TAG_Compound()
-        while True:
-            t_type = read_ubyte(f)
-            if t_type == 0:
-                break
-            t_name = read_string(f)
-            t_val = read_tag(f, t_type)
-            comp[t_name] = t_val
-        return comp
-    elif tag_type == 11:
-        length = read_int(f)
-        ints = struct.unpack(f'>{length}i', f.read(length * 4))
-        return TAG_Int_Array(ints)
-    elif tag_type == 12:
-        length = read_int(f)
-        longs = struct.unpack(f'>{length}q', f.read(length * 8))
-        return TAG_Long_Array(longs)
-    else:
-        raise ValueError(f"Unknown tag type {tag_type}")
+    """Compatibility helper: reads a tag payload from a file-like object."""
+    data = f.read()
+    val, pos = _read_payload(data, 0, tag_type)
+    if hasattr(f, 'seek'):
+        f.seek(pos - len(data), 1)
+    return val
 
 
-def write_byte(f, val):
-    f.write(struct.pack('>b', int(val)))
-
-def write_ubyte(f, val):
-    f.write(struct.pack('>B', int(val)))
-
-def write_short(f, val):
-    f.write(struct.pack('>h', int(val)))
-
-def write_ushort(f, val):
-    f.write(struct.pack('>H', int(val)))
-
-def write_int(f, val):
-    f.write(struct.pack('>i', int(val)))
-
-def write_long(f, val):
-    f.write(struct.pack('>q', int(val)))
-
-def write_float(f, val):
-    f.write(struct.pack('>f', float(val)))
-
-def write_double(f, val):
-    f.write(struct.pack('>d', float(val)))
-
-def write_string(f, val):
-    b = val.encode('utf-8')
-    write_ushort(f, len(b))
-    f.write(b)
-
+# ---------------------------------------------------------------------------
+# Writing: tags are serialized into a bytearray, then written in one go.
+# ---------------------------------------------------------------------------
 
 def to_nbt(val):
     if hasattr(val, 'tag_type'):
@@ -207,106 +204,106 @@ def to_nbt(val):
     raise TypeError(f"Cannot convert type {type(val)} to NBT tag")
 
 
-def write_tag(f, tag):
-    tag_type = getattr(tag, 'tag_type', None)
-    if tag_type is None:
-        tag = to_nbt(tag)
-        tag_type = tag.tag_type
+def _write_string(out, val):
+    b = val.encode('utf-8')
+    out += _UH.pack(len(b))
+    out += b
 
+
+def _write_payload(out, tag):
+    tag_type = tag.tag_type
     if tag_type == 1:
-        f.write(struct.pack('>b', tag))
+        out += _B.pack(tag)
     elif tag_type == 2:
-        f.write(struct.pack('>h', tag))
+        out += _H.pack(tag)
     elif tag_type == 3:
-        f.write(struct.pack('>i', tag))
+        out += _I.pack(tag)
     elif tag_type == 4:
-        f.write(struct.pack('>q', tag))
+        out += _Q.pack(tag)
     elif tag_type == 5:
-        f.write(struct.pack('>f', tag))
+        out += _F.pack(tag)
     elif tag_type == 6:
-        f.write(struct.pack('>d', tag))
+        out += _D.pack(tag)
     elif tag_type == 7:
-        write_int(f, len(tag))
-        f.write(tag)
+        out += _I.pack(len(tag))
+        out += tag
     elif tag_type == 8:
-        write_string(f, tag)
+        _write_string(out, tag)
     elif tag_type == 9:
-        write_ubyte(f, tag.item_type)
-        write_int(f, len(tag))
-        for item in tag:
-            write_tag(f, item)
+        items = [to_nbt(x) for x in tag]
+        item_type = tag.item_type if getattr(tag, 'item_type', 0) else (items[0].tag_type if items else 0)
+        out += _UB.pack(item_type)
+        out += _I.pack(len(items))
+        for item in items:
+            _write_payload(out, item)
     elif tag_type == 10:
         for name, item in tag.items():
             c_tag = to_nbt(item)
-            write_ubyte(f, c_tag.tag_type)
-            write_string(f, name)
-            write_tag(f, c_tag)
-        write_ubyte(f, 0) # TAG_End
+            out += _UB.pack(c_tag.tag_type)
+            _write_string(out, name)
+            _write_payload(out, c_tag)
+        out += b'\x00'  # TAG_End
     elif tag_type == 11:
-        write_int(f, len(tag))
-        f.write(struct.pack(f'>{len(tag)}i', *tag))
+        out += _I.pack(len(tag))
+        out += struct.pack(f'>{len(tag)}i', *tag)
     elif tag_type == 12:
-        write_int(f, len(tag))
-        f.write(struct.pack(f'>{len(tag)}q', *tag))
+        out += _I.pack(len(tag))
+        out += struct.pack(f'>{len(tag)}q', *tag)
+
+
+def nbt_to_bytes(tag, name=""):
+    """Serializes a root tag into uncompressed NBT bytes."""
+    tag = to_nbt(tag)
+    out = bytearray()
+    out += _UB.pack(tag.tag_type)
+    _write_string(out, name)
+    _write_payload(out, tag)
+    return bytes(out)
+
+
+def write_tag(f, tag):
+    """Compatibility helper: writes a tag payload to a file-like object."""
+    out = bytearray()
+    _write_payload(out, to_nbt(tag))
+    f.write(out)
+
+
+# ---------------------------------------------------------------------------
+# File helpers
+# ---------------------------------------------------------------------------
+
+def _maybe_decompress(data):
+    if data[:2] == b'\x1f\x8b':
+        return gzip.decompress(data)
+    if data[:1] == b'\x78':  # zlib header
+        try:
+            return zlib.decompress(data)
+        except zlib.error:
+            pass
+    return data
 
 
 def load_nbt(f_or_path):
-    if isinstance(f_or_path, str):
+    if isinstance(f_or_path, (bytes, bytearray)):
+        data = bytes(f_or_path)
+    elif isinstance(f_or_path, str):
         with open(f_or_path, 'rb') as raw:
-            magic = raw.read(2)
-        if magic == b'\x1f\x8b':
-            f = gzip.open(f_or_path, 'rb')
-        else:
-            f = open(f_or_path, 'rb')
+            data = raw.read()
     elif hasattr(f_or_path, 'read'):
-        # Peek magic bytes if possible, else wrap or trust gzip
-        # We can try to read 2 bytes, then seek back if it's seekable
-        f = f_or_path
-        if hasattr(f, 'seek'):
-            pos = f.tell()
-            magic = f.read(2)
-            f.seek(pos)
-            if magic == b'\x1f\x8b':
-                # Re-wrap
-                # GzipFile needs a seekable object if we pass fileobj
-                f = gzip.GzipFile(fileobj=f)
+        data = f_or_path.read()
     else:
         raise ValueError("Invalid file or path")
-
-    try:
-        t_type = read_ubyte(f)
-        if t_type == 0:
-            return None, ""
-        name = read_string(f)
-        val = read_tag(f, t_type)
-        return val, name
-    finally:
-        if isinstance(f_or_path, str):
-            f.close()
+    return parse_nbt_bytes(_maybe_decompress(data))
 
 
 def save_nbt(tag, name, f_or_path, compressed=True):
+    data = nbt_to_bytes(tag, name)
+    if compressed:
+        data = gzip.compress(data, compresslevel=6)
     if isinstance(f_or_path, str):
-        if compressed:
-            f = gzip.open(f_or_path, 'wb')
-        else:
-            f = open(f_or_path, 'wb')
+        with open(f_or_path, 'wb') as f:
+            f.write(data)
     elif hasattr(f_or_path, 'write'):
-        f = f_or_path
-        if compressed:
-            f = gzip.GzipFile(fileobj=f, mode='wb')
+        f_or_path.write(data)
     else:
         raise ValueError("Invalid file or path")
-
-    try:
-        tag = to_nbt(tag)
-        write_ubyte(f, tag.tag_type)
-        write_string(f, name)
-        write_tag(f, tag)
-        if hasattr(f, 'flush'):
-            f.flush()
-    finally:
-        if isinstance(f_or_path, str):
-            f.close()
-        elif compressed and hasattr(f, 'close'):
-            f.close() # Close gzip wrapper

@@ -1,12 +1,13 @@
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QTransform, QFont
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QTimer
-from mca_codec import unpack_section
+from mca_codec import read_world_surface, surface_heights
 
 class MapViewer(QWidget):
     # Signals
     hover_changed = pyqtSignal(int, int, int)  # x, z, y height
     structure_placed = pyqtSignal(int, int)    # grid_x, grid_z
+    rotate_requested = pyqtSignal()            # R key pressed
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,7 +23,7 @@ class MapViewer(QWidget):
         # Map image data
         self.map_pixmap = None
         self.region = None
-        self.heights_cache = {}  # (cx, cz) -> list of 256 heights
+        self.heights_cache = {}  # (cx, cz) -> Y of the top block of each of the 256 columns
         self.region_heights = [[62] * 512 for _ in range(512)]  # 512x512 heightmap for hillshading
         
         # Player marker state
@@ -146,9 +147,10 @@ class MapViewer(QWidget):
                     
         self.structure_preview_pixmap = QPixmap.fromImage(img)
 
-    def set_selected_structure(self, structure):
+    def set_selected_structure(self, structure, keep_lock=False):
         self.selected_structure = structure
-        self.is_locked = False
+        if not keep_lock:
+            self.is_locked = False
         self.precompute_structure_preview()
         self.update()
         
@@ -158,104 +160,28 @@ class MapViewer(QWidget):
         self.update()
         
     def get_chunk_heightmap(self, cx, cz):
+        """Y of the topmost block of each column (index z*16+x) of a region-local chunk."""
         if (cx, cz) in self.heights_cache:
             return self.heights_cache[(cx, cz)]
-            
-        if not self.region or (cx, cz) not in self.region.chunks:
+
+        if not self.region:
             return None
-            
-        chunk_nbt, _ = self.region.chunks[(cx, cz)]
-        
-        # 1. Try to read from Heightmaps -> WORLD_SURFACE
-        if "Heightmaps" in chunk_nbt:
-            hm = chunk_nbt["Heightmaps"]
-            if "WORLD_SURFACE" in hm:
-                ws = hm["WORLD_SURFACE"]
-                # 37 longs, 9 bits per value, 7 values per long
-                heights = [0] * 256
-                B = 9
-                V = 7
-                for index in range(256):
-                    long_idx = index // V
-                    if long_idx < len(ws):
-                        bit_offset = (index % V) * B
-                        val = (ws[long_idx] >> bit_offset) & 0x1FF
-                        heights[index] = val - 64  # Translate back to Minecraft Y (-64 to 320)
-                self.heights_cache[(cx, cz)] = heights
-                return heights
-                
-        # 2. Optimized Fallback: scan sections from top to bottom
-        sections = chunk_nbt.get("sections", [])
-        if not sections:
-            heights = [62] * 256
+        # Fast path: read only the heightmap bytes instead of parsing the whole chunk
+        heights = self.region.quick_surface((cx, cz))
+        if heights is not None:
             self.heights_cache[(cx, cz)] = heights
             return heights
-            
-        sec_dict = {}
-        for sec in sections:
-            sy = int(sec.get("Y", 0))
-            sec_dict[sy] = sec
-            
-        heights = [None] * 256
-        remaining = 256
-        
-        # Process sections from top to bottom
-        for sy in sorted(sec_dict.keys(), reverse=True):
-            if remaining <= 0:
-                break
-                
-            sec = sec_dict[sy]
-            if "block_states" not in sec:
-                continue
-                
-            bs = sec["block_states"]
-            palette = bs.get("palette", [])
-            if not palette:
-                continue
-                
-            # If section contains only 1 type of block
-            if len(palette) == 1:
-                b_name = palette[0].get("Name", "minecraft:air")
-                if b_name == "minecraft:air" or "water" in b_name:
-                    # Skip empty/water section entirely
-                    continue
-                else:
-                    # Section is filled entirely with a solid block
-                    top_y = sy * 16 + 15
-                    for i in range(256):
-                        if heights[i] is None:
-                            heights[i] = top_y
-                            remaining -= 1
-                    continue
-                    
-            # Check if all blocks in palette are air/water
-            if all(b.get("Name", "minecraft:air") == "minecraft:air" or "water" in b.get("Name", "") for b in palette):
-                continue
-                
-            # Unpack section blocks
-            blocks = unpack_section(sec)
-            
-            # Scan columns inside this section
-            for z in range(16):
-                for x in range(16):
-                    idx_2d = z * 16 + x
-                    if heights[idx_2d] is not None:
-                        continue
-                        
-                    # Scan blocks from top to bottom of section
-                    for by in range(15, -1, -1):
-                        b_idx = by * 256 + idx_2d
-                        b_name = blocks[b_idx].get("Name", "minecraft:air")
-                        if b_name != "minecraft:air" and "water" not in b_name:
-                            heights[idx_2d] = sy * 16 + by
-                            remaining -= 1
-                            break
-                            
-        # Fill any unresolved pixels with fallback height 62
-        for i in range(256):
-            if heights[i] is None:
-                heights[i] = 62
-                
+        entry = self.region.chunks.get((cx, cz))
+        if entry is None:
+            return None
+        chunk_nbt, _ = entry
+
+        heights = read_world_surface(chunk_nbt)
+        if heights is None:
+            if chunk_nbt.get("sections"):
+                heights, _ = surface_heights(chunk_nbt)
+            else:
+                heights = [62] * 256
         self.heights_cache[(cx, cz)] = heights
         return heights
 
@@ -387,11 +313,12 @@ class MapViewer(QWidget):
             painter.drawText(QRectF(0, 0, 512, 512), Qt.AlignmentFlag.AlignCenter, "Nessuna mappa caricata\nSeleziona una cartella salvataggi")
             
         # Draw Staged Placements
-        if hasattr(self, 'staged_placements') and self.staged_placements and self.map_pixmap:
+        if self.staged_placements and self.map_pixmap and self.region:
             for item in self.staged_placements:
                 s = item["structure"]
-                gx = item["grid_x"]
-                gz = item["grid_z"]
+                # Staged placements are stored in world coordinates (they may span regions)
+                gx = item["world_x"] - self.region.rx * 512
+                gz = item["world_z"] - self.region.rz * 512
                 y_val = item["y_coord"]
                 name = item["name"]
                 pixmap = item["preview_pixmap"]
@@ -675,10 +602,9 @@ class MapViewer(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_R and self.selected_structure:
-            # Rotate structure clockwise
-            self.selected_structure = self.selected_structure.rotate(90)
-            self.precompute_structure_preview()
-            self.update()
+            # The main window owns the selected structure: rotating only the preview
+            # here would inject a structure different from the one displayed.
+            self.rotate_requested.emit()
             
     def center_on_map(self):
         self.zoom_level = 1.0
