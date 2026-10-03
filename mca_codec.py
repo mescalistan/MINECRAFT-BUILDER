@@ -426,11 +426,13 @@ def surface_heights(chunk_nbt):
 
 def read_world_surface(chunk_nbt):
     """Reads the WORLD_SURFACE heightmap as top-block Y values, or None if absent."""
-    hm = chunk_nbt.get("Heightmaps") or {}
+    legacy = "Level" in chunk_nbt  # 1.16-1.17 chunk not yet upgraded by the game
+    root = chunk_nbt["Level"] if legacy else chunk_nbt
+    hm = root.get("Heightmaps") or {}
     ws = hm.get("WORLD_SURFACE")
-    if not ws or len(ws) != 37:  # 9 bits per value, 7 values per long
+    if not ws or len(ws) != 37:  # 9 bits per value, 7 values per long (1.16+ layout)
         return None
-    min_y = chunk_min_y(chunk_nbt)
+    min_y = 0 if legacy else chunk_min_y(chunk_nbt)
     values = decode_indices(ws, 9, 256)
     return [v + min_y - 1 for v in values]
 

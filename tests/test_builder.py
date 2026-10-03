@@ -183,6 +183,17 @@ class InjectionTests(unittest.TestCase):
         self.assertEqual(block_at(r0, 50 + 5, y + 1, 50 + 5), "minecraft:air")
         self.assertGreater(stats["cleared"], 0)
 
+    def test_legacy_chunks_are_skipped_not_fatal(self):
+        # Worlds upgraded from 1.16 keep "Level"-wrapped chunks until the game reloads them
+        region = MCARegion(os.path.join(self.tmp, "r.0.0.mca"))
+        chunk, ts = region.chunks[(3, 3)]
+        legacy = TAG_Compound({"DataVersion": TAG_Int(2586), "Level": TAG_Compound({"xPos": TAG_Int(3)})})
+        region.chunks[(3, 3)] = (legacy, ts)
+        region.save()
+        s, stats, _ = self.place("market_stall.nbt", 46, GROUND_Y + 1, 46)
+        self.assertGreater(stats["skipped_missing"], 0)
+        self.assertGreater(stats["placed"], 0)
+
     def test_modded_blocks_are_skipped(self):
         s, stats, _ = self.place("space_station.nbt", 200, GROUND_Y + 1, 200)
         self.assertGreater(stats["skipped_modded"], 0)

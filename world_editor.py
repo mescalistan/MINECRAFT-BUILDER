@@ -7,7 +7,7 @@ import os
 from nbt_codec import TAG_Compound, TAG_String
 from mca_codec import (
     MCARegion, ChunkEditor, AIR_NAMES, block_key, chunk_is_full,
-    chunk_format_supported, UnsupportedChunkFormat,
+    chunk_format_supported,
 )
 
 AIR_STATE = TAG_Compound({"Name": TAG_String("minecraft:air")})
@@ -95,9 +95,9 @@ class World:
             if entry is None:
                 self.skipped_chunks[key] = "chunk non generato"
             elif not chunk_format_supported(entry[0]):
-                raise UnsupportedChunkFormat(
-                    "Il mondo usa un formato precedente alla 1.18: aprilo e salvalo con una versione recente di Minecraft."
-                )
+                # Worlds upgraded from older versions keep old-format chunks until the
+                # game loads them again: skip them instead of aborting the whole injection.
+                self.skipped_chunks[key] = "chunk in formato pre-1.18 (visita l'area in gioco per aggiornarlo)"
             elif not chunk_is_full(entry[0]):
                 self.skipped_chunks[key] = "chunk generato solo in parte"
             else:

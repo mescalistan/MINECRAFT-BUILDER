@@ -1336,11 +1336,11 @@ class MinecraftBuilderApp(QMainWindow):
 
 def is_minecraft_running():
     try:
+        # Java Edition runs as javaw.exe. Minecraft.exe is only the launcher (it stays open
+        # while the game is closed), so it must not trigger the warning; an open world is
+        # detected reliably through its session.lock anyway.
         output = subprocess.check_output('tasklist /FI "IMAGENAME eq javaw.exe" /NH', shell=True).decode('utf-8', errors='ignore')
         if "javaw.exe" in output:
-            return True
-        output = subprocess.check_output('tasklist /FI "IMAGENAME eq Minecraft.exe" /NH', shell=True).decode('utf-8', errors='ignore')
-        if "Minecraft.exe" in output:
             return True
     except:
         pass

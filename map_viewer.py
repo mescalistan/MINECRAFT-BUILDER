@@ -178,7 +178,7 @@ class MapViewer(QWidget):
 
         heights = read_world_surface(chunk_nbt)
         if heights is None:
-            if chunk_nbt.get("sections"):
+            if chunk_nbt.get("sections") and "Level" not in chunk_nbt:
                 heights, _ = surface_heights(chunk_nbt)
             else:
                 heights = [62] * 256
