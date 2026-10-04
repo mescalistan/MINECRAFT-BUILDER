@@ -128,6 +128,17 @@ class World:
         self._editors[key] = editor
         return editor
 
+    def forget_chunk(self, chunk_x, chunk_z):
+        """Frees the memory of a chunk that was only read (used when scanning large areas)."""
+        key = (chunk_x, chunk_z)
+        editor = self._editors.get(key)
+        if editor is not None and editor.dirty:
+            return
+        self._editors.pop(key, None)
+        region = self._regions.get((chunk_x >> 5, chunk_z >> 5))
+        if region is not None and (chunk_x & 31, chunk_z & 31) not in region.dirty:
+            region.chunks._decoded.pop((chunk_x & 31, chunk_z & 31), None)
+
     def get_block(self, x, y, z):
         """Block state compound at (x, y, z), or None if the chunk is not editable/loaded."""
         editor = self.editor(x >> 4, z >> 4)
@@ -211,15 +222,23 @@ class WorldTerrain:
         if key not in self._cache:
             top = self.world.surface_y(x, z)
             if top is None:
-                self._cache[key] = (None, False)
+                self._cache[key] = (None, False, False)
             else:
                 name = self.world.get_block_name(x, top, z) or ""
+                tree = name.endswith(("_leaves", "_log", "_wood"))
                 if "water" in name or "lava" in name:
-                    self._cache[key] = (top, True)
+                    self._cache[key] = (top, True, False)
                 else:
                     ground = self.world.ground_y(x, z, top)
-                    self._cache[key] = (ground if ground is not None else top, False)
+                    # under a tree the ground is below the trunk
+                    while ground is not None and (self.world.get_block_name(x, ground, z) or "").endswith(
+                            ("_log", "_wood")):
+                        ground = self.world.ground_y(x, z, ground - 1)
+                    self._cache[key] = (ground if ground is not None else top, False, tree)
         return self._cache[key]
+
+    def is_tree(self, x, z):
+        return self._column(x, z)[2]
 
     def height(self, x, z):
         return self._column(x, z)[0]
@@ -229,7 +248,7 @@ class WorldTerrain:
 
 
 def inject_structures(world, placements, fill_foundations=True, clear_terrain=True,
-                      skip_modded=True, log=None):
+                      skip_modded=True, log=None, blend=False):
     """
     Places the structures in the world (in memory). Call world.save() afterwards.
     Each placement: {"structure", "world_x", "world_z", "y_coord", "name"}.
@@ -237,7 +256,7 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
     """
     log = log or (lambda msg: None)
     stats = {"placed": 0, "cleared": 0, "foundation": 0, "skipped_missing": 0,
-             "skipped_modded": 0, "skipped_height": 0}
+             "skipped_modded": 0, "skipped_height": 0, "destroyed": 0, "blend": 0}
 
     stats["path"] = 0
     for item in placements:
@@ -262,14 +281,18 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
             for (bx, bz), by in columns_bottom.items():
                 # Only columns resting on the structure's lowest layer: arches, bridges
                 # and overhangs keep the empty space below them.
-                if by != base_layer:
+                pillar_cols = item.get("pillar_columns")
+                if pillar_cols is not None:
+                    if (bx, bz) not in pillar_cols:
+                        continue  # e.g. under the arches of a bridge
+                elif by != base_layer and not item.get("pillars"):
                     continue
                 gx, gz = ox + bx, oz + bz
                 base_y = oy + by
                 ground = world.ground_y(gx, gz, base_y - 1)
                 if ground is None or ground >= base_y - 1:
                     continue
-                pillars = item.get("extend_columns")
+                pillars = item.get("extend_columns") or item.get("pillars") or pillar_cols is not None
                 # A big gap means the structure floats on purpose (sky builds, high placements):
                 # only small gaps are filled. Structures resting on water (boats, docks) are not
                 # propped up either; bridge piers always go down to the bottom.
@@ -299,6 +322,8 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                     continue
                 if world.set_block(gx, gy, gz, AIR_STATE):
                     stats["cleared"] += 1
+                    if not current.endswith(("water", "lava")):
+                        stats["destroyed"] += 1
                 continue
             if skip_modded and not name.startswith("minecraft:"):
                 stats["skipped_modded"] += 1
@@ -313,8 +338,13 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
             state, state_key = cached
             if editor is None:
                 stats["skipped_missing"] += 1
-            elif world.set_block(gx, gy, gz, state, state_key):
+                continue
+            current = editor.get_block(gx & 15, gy, gz & 15)
+            current_name = str(current.get("Name", "minecraft:air")) if current is not None else "minecraft:air"
+            if world.set_block(gx, gy, gz, state, state_key):
                 stats["placed"] += 1
+                if current_name not in AIR_NAMES and not current_name.endswith(("water", "lava"))                         and current_name != state["Name"]:
+                    stats["destroyed"] += 1
             else:
                 stats["skipped_height"] += 1
 
@@ -324,7 +354,54 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                 if world.set_block(gx, y, gz, surf if y == base_y - 1 else sub):
                     stats["foundation"] += 1
 
+        if blend and item.get("blend", True) and not item.get("extend_columns")                 and struct.width >= 3 and struct.length >= 3 and columns_bottom:
+            stats["blend"] += blend_terrain(world, ox, oz, struct.width, struct.length, oy + base_layer - 1)
+
     return stats
+
+
+BLEND_MARGIN = 3
+
+
+def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGIN):
+    """
+    Gentle earth slope around a building: natural ground lower than the building's
+    ground level is raised gradually over 'margin' blocks. Only adds blocks on natural
+    terrain (never digs, never covers water, trees or other constructions).
+    Returns the number of blocks added.
+    """
+    from world_extractor import is_natural_terrain
+    added = 0
+    for x in range(ox - margin, ox + width + margin):
+        for z in range(oz - margin, oz + length + margin):
+            if ox <= x < ox + width and oz <= z < oz + length:
+                continue
+            d = max(ox - x, x - (ox + width - 1), oz - z, z - (oz + length - 1))
+            top = world.surface_y(x, z)
+            if top is None:
+                continue
+            ground = world.ground_y(x, z, top)
+            if ground is None:
+                continue
+            name = world.get_block_name(x, ground, z) or ""
+            if not is_natural_terrain(name) or name.endswith(("water", "lava")):
+                continue
+            # something non-natural (a building, a path, a fence) stands right above: leave it alone
+            above = world.get_block_name(x, ground + 1, z) or "minecraft:air"
+            if above not in AIR_NAMES and not is_natural_terrain(above):
+                continue
+            gap = floor_ground - ground
+            if gap <= 0 or gap > MAX_FOUNDATION_GAP:
+                continue
+            target = ground + int(round(gap * (1 - d / (margin + 1))))
+            surf_name, sub_name = surface_fill_blocks(name)
+            surf, sub = to_state({"Name": surf_name}), to_state({"Name": sub_name})
+            for y in range(ground + 1, target + 1):
+                if world.set_block(x, y, z, surf if y == target else sub):
+                    added += 1
+            if target > ground and name.endswith("grass_block"):
+                world.set_block(x, ground, z, sub)  # buried grass becomes dirt
+    return added
 
 
 _PATH_ON = {

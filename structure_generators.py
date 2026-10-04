@@ -4,6 +4,7 @@ calcolo di un ponte tra due sponde con aggancio ai ponti esistenti, lampioni.
 
 Tutti i ponti sono generati lungo l'asse Z (larghezza su X) e ruotati quando servono lungo X.
 """
+import math
 import os
 import sys
 
@@ -234,3 +235,353 @@ def lamp_post(wood="spruce"):
     b.fill(0, 0, 0, 0, 1, 0, f"{wood}_fence")
     b.lantern(0, 2, 0)
     return b.to_structure()
+
+
+# ---------------------------------------------------------------------------
+# Bridges that follow the terrain profile
+# ---------------------------------------------------------------------------
+
+STONE_PALETTES = {
+    "stone": {"main": [("stone_bricks", 8), ("cracked_stone_bricks", 1), ("mossy_stone_bricks", 1)],
+              "stairs": "stone_brick", "rail": "stone_brick_wall", "accent": "chiseled_stone_bricks"},
+    "mossy": {"main": [("mossy_stone_bricks", 5), ("mossy_cobblestone", 2), ("stone_bricks", 2)],
+              "stairs": "mossy_stone_brick", "rail": "mossy_stone_brick_wall", "accent": "chiseled_stone_bricks"},
+    "sandstone": {"main": [("cut_sandstone", 5), ("smooth_sandstone", 3), ("sandstone", 2)],
+                  "stairs": "sandstone", "rail": "sandstone_wall", "accent": "chiseled_sandstone"},
+    "red_sandstone": {"main": [("cut_red_sandstone", 5), ("smooth_red_sandstone", 3), ("red_sandstone", 2)],
+                      "stairs": "red_sandstone", "rail": "red_sandstone_wall", "accent": "chiseled_red_sandstone"},
+    "mud": {"main": [("mud_bricks", 1)], "stairs": "mud_brick", "rail": "mud_brick_wall", "accent": "packed_mud"},
+    "deepslate": {"main": [("deepslate_bricks", 6), ("cracked_deepslate_bricks", 1), ("deepslate_tiles", 2)],
+                  "stairs": "deepslate_brick", "rail": "deepslate_brick_wall", "accent": "chiseled_deepslate"},
+    "nether": {"main": [("nether_bricks", 6), ("cracked_nether_bricks", 1)], "stairs": "nether_brick",
+               "rail": "nether_brick_fence", "accent": "chiseled_nether_bricks", "soul": True},
+}
+PALETTE_TITLES = {"stone": "pietra", "mossy": "pietra muschiosa", "sandstone": "arenaria",
+                  "red_sandstone": "arenaria rossa", "mud": "mattoni di fango", "deepslate": "ardesia",
+                  "nether": "mattoni del Nether"}
+WOOD_TYPES = ("oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove", "cherry")
+WOOD_TITLES = {"oak": "quercia", "spruce": "abete", "birch": "betulla", "jungle": "legno della giungla",
+               "acacia": "acacia", "dark_oak": "quercia scura", "mangrove": "mangrovia", "cherry": "ciliegio"}
+
+
+def environment_palette(world, points, radius=10):
+    """(stone palette, wood type) that match the ground and the trees around the given points."""
+    from collections import Counter
+    stone, wood = Counter(), Counter()
+    for px, pz in points:
+        for dx in range(-radius, radius + 1, 2):
+            for dz in range(-radius, radius + 1, 2):
+                x, z = px + dx, pz + dz
+                top = world.surface_y(x, z)
+                if top is None:
+                    continue
+                for y in (top, top - 1):
+                    n = (world.get_block_name(x, y, z) or "").split(":", 1)[-1]
+                    if "red_sand" in n or "terracotta" in n:
+                        stone["red_sandstone"] += 1
+                    elif "sand" in n:
+                        stone["sandstone"] += 1
+                    elif n in ("mud", "muddy_mangrove_roots", "mangrove_roots"):
+                        stone["mud"] += 1
+                    elif "snow" in n or "ice" in n:
+                        stone["deepslate"] += 1
+                    elif "moss" in n or n.startswith("jungle") or n == "podzol":
+                        stone["mossy"] += 1
+                    elif "netherrack" in n or "nylium" in n or "soul_s" in n:
+                        stone["nether"] += 2
+                    elif n in ("stone", "grass_block", "dirt", "gravel", "andesite", "cobblestone"):
+                        stone["stone"] += 0.4
+                    for w in WOOD_TYPES:
+                        if n in (f"{w}_log", f"{w}_leaves"):
+                            wood[w] += 1
+    key = stone.most_common(1)[0][0] if stone else "stone"
+    return key, (wood.most_common(1)[0][0] if wood else "spruce")
+
+
+def _profile(terrain, axis, center, lo, hi, half, clearance, integrate, start_deck=None, end_deck=None):
+    """
+    Deck height of each block of the span (and of the ramps added at the ends).
+    Classic: flat at the higher bank (and above the water), with 45 degree ramps down to the
+    banks. Integrated: a gentle hump from bank to bank (1 block every 2), high enough over the
+    water for boats, riding over any hill instead of digging into it.
+    """
+    def col(i, c):
+        return (i, c) if axis == "x" else (c, i)
+
+    ground, water = {}, {}
+    for i in range(lo - 32, hi + 33):
+        land, wet = [], []
+        for c in range(center - half, center + half + 1):
+            x, z = col(i, c)
+            h = terrain.height(x, z)
+            if h is None:
+                continue
+            (wet if terrain.is_water(x, z) else land).append(h)
+        water[i] = max(wet) if wet else None
+        ground[i] = max(land) if land else (max(wet) if wet else None)
+
+    def bank(i, step):
+        for k in range(0, 12):
+            j = i + k * step
+            if ground.get(j) is not None and water.get(j) is None:
+                return ground[j]
+        return ground.get(i)
+
+    ga = start_deck if start_deck is not None else bank(lo, -1)
+    gb = end_deck if end_deck is not None else bank(hi, 1)
+    if ga is None or gb is None:
+        return None
+    n = hi - lo + 1
+    wet = [water[i] for i in range(lo, hi + 1) if water[i] is not None]
+    target = []
+    for k, i in enumerate(range(lo, hi + 1)):
+        if integrate:
+            t = ga + (gb - ga) * k / max(n - 1, 1)
+            if water[i] is not None:
+                t = max(t, water[i] + clearance)
+            elif ground[i] is not None:
+                t = max(t, ground[i])
+        else:
+            t = max(ga, gb, (max(wet) + clearance) if wet else -999)
+        target.append(t)
+    slope = 0.5 if integrate else 1.0
+    deck = list(target)
+    for k in range(1, n):
+        deck[k] = max(deck[k], deck[k - 1] - slope)
+    for k in range(n - 2, -1, -1):
+        deck[k] = max(deck[k], deck[k + 1] - slope)
+    if start_deck is not None:
+        deck[0] = start_deck
+    if end_deck is not None:
+        deck[-1] = end_deck
+
+    # ramps down to the banks beyond the clicked points
+    pre, post = [], []
+    if start_deck is None:
+        v, i = deck[0], lo - 1
+        while len(pre) < 30 and ground.get(i) is not None and v - slope > ground[i] + 0.01:
+            v -= slope
+            pre.append(v)
+            i -= 1
+    if end_deck is None:
+        v, i = deck[-1], hi + 1
+        while len(post) < 30 and ground.get(i) is not None and v - slope > ground[i] + 0.01:
+            v -= slope
+            post.append(v)
+            i += 1
+    deck = list(reversed(pre)) + deck + post
+    lo2, hi2 = lo - len(pre), hi + len(post)
+    deck = [int(math.ceil(v - 1e-6)) for v in deck]
+    return {"lo": lo2, "hi": hi2, "deck": deck,
+            "ground": [ground.get(i) for i in range(lo2, hi2 + 1)],
+            "water": [water.get(i) for i in range(lo2, hi2 + 1)]}
+
+
+def build_profile_bridge(kind, palette_key, wood, prof, axis, span=10):
+    """Bridge 5 blocks wide along 'axis' whose deck follows prof['deck'] (world Y of the deck block)."""
+    d, g, wat = prof["deck"], prof["ground"], prof["water"]
+    n = len(d)
+    W = 5
+    y0 = min(d) - 4
+    pal = STONE_PALETTES[palette_key]
+    b = Builder(n if axis == "x" else W, max(d) - y0 + 5, W if axis == "x" else n, seed=11)
+    fwd, back = ("east", "west") if axis == "x" else ("south", "north")
+    pillars = set()
+
+    def xz(u, v):
+        return (u, v) if axis == "x" else (v, u)
+
+    def P(u, y, v, block, **props):
+        x, z = xz(u, v)
+        b.set(x, y - y0, z, block, **props)
+
+    def main(u, y, v):
+        blocks = [c[0] for c in pal["main"]]
+        P(u, y, v, b.rng.choices(blocks, [c[1] for c in pal["main"]])[0])
+
+    def stair(u, y, v, facing, top=False):
+        x, z = xz(u, v)
+        b.stair(x, y - y0, z, wood if kind == "wood" else pal["stairs"], facing, top)
+
+    def needs_support(u):
+        if wat[u] is not None:
+            return True
+        return g[u] is None or d[u] - g[u] >= 3
+
+    # piers (stone) / posts (wood) inside the stretches that need support
+    supports = []
+    u = 0
+    every = span if kind == "stone" else 4
+    while u < n:
+        if needs_support(u):
+            start = u
+            while u < n and needs_support(u):
+                u += 1
+            m = u - start
+            k = max(0, (m - 2) // every)
+            for j in range(1, k + 1):
+                supports.append(start + round(j * m / (k + 1)) - (1 if kind == "stone" else 0))
+        else:
+            u += 1
+    support_cells = set()
+    for s in supports:
+        support_cells.update((s, s + 1) if kind == "stone" else (s,))
+
+    for u in range(n):
+        y = d[u]
+        for v in range(W):
+            if kind == "wood":
+                P(u, y, v, f"{wood}_planks")
+            else:
+                main(u, y, v)
+        for v in (0, W - 1):
+            P(u, y + 1, v, pal["rail"] if kind == "stone" else f"{wood}_fence")
+        for v in range(1, W - 1):
+            for yy in range(y + 1, y + 4):
+                P(u, yy, v, AIR)
+        if not needs_support(u):
+            if kind == "stone":
+                for v in range(W):
+                    pillars.add(xz(u, v))   # embankment: solid down to the ground
+            else:
+                for v in (0, W - 1):
+                    P(u, y - 1, v, f"{wood}_log", axis="y")
+                    pillars.add(xz(u, v))
+        elif kind == "stone":
+            for v in range(W):
+                main(u, y - 1, v)
+        # ramps
+        if u + 1 < n and d[u + 1] == y + 1:
+            for v in range(1, W - 1):
+                stair(u, y + 1, v, fwd)
+        if u > 0 and d[u - 1] == y + 1:
+            for v in range(1, W - 1):
+                stair(u, y + 1, v, back)
+
+    if kind == "stone":
+        for u in sorted(support_cells):
+            if u >= n:
+                continue
+            for v in range(W):
+                for yy in range(y0, d[u] - 1):
+                    main(u, yy, v)
+                pillars.add(xz(u, v))
+        # arches between the supports (and the embankments)
+        for u in range(n):
+            if u in support_cells or not needs_support(u):
+                continue
+            left = u > 0 and (u - 1 in support_cells or not needs_support(u - 1))
+            right = u < n - 1 and (u + 1 in support_cells or not needs_support(u + 1))
+            for v in range(W):
+                if left:
+                    stair(u, d[u] - 2, v, back, top=True)
+                elif right:
+                    stair(u, d[u] - 2, v, fwd, top=True)
+                else:
+                    x, z = xz(u, v)
+                    b.slab(x, d[u] - 2 - y0, z, pal["stairs"], top=True)
+    else:
+        for u in supports:
+            for v in (0, W - 1):
+                for yy in range(y0, d[u]):
+                    P(u, yy, v, f"{wood}_log", axis="y")
+                pillars.add(xz(u, v))
+                P(u, d[u] + 1, v, f"{wood}_log", axis="y")
+            for v in range(1, W - 1):
+                P(u, d[u] - 1, v, f"stripped_{wood}_log", axis="z" if axis == "x" else "x")
+
+    # lanterns on the railings and entrance pillars at the two ends
+    soul = pal.get("soul", False) and kind == "stone"
+    for u in range(0, n, 6):
+        for v in (0, W - 1):
+            if kind == "wood" and u not in supports:
+                P(u, d[u] + 1, v, f"{wood}_log", axis="y")
+            x, z = xz(u, v)
+            b.lantern(x, d[u] + 2 - y0, z, soul=soul)
+    for u in (0, n - 1):
+        for v in (0, W - 1):
+            if kind == "stone":
+                P(u, d[u] + 1, v, pal["accent"])
+            else:
+                P(u, d[u] + 1, v, f"{wood}_log", axis="y")
+            x, z = xz(u, v)
+            b.lantern(x, d[u] + 2 - y0, z, soul=soul)
+    return b.to_structure(), y0, pillars
+
+
+def plan_bridge(style, a, b, terrain, existing=(), integrate=False, world=None):
+    """
+    Bridge from bank a=(x, z) to bank b. The bridge is straight along the main axis, starting
+    from the first click. With integrate=True the deck rises gently from bank to bank, stays high
+    enough over the water for boats and uses the materials of the place (sandstone in the
+    desert, mud bricks in swamps, the local wood...).
+    Returns a placement like bridge_between, with pillar_columns for the piers.
+    """
+    axis = "x" if abs(b[0] - a[0]) >= abs(b[1] - a[1]) else "z"
+    along = 0 if axis == "x" else 1
+    cross = 1 - along
+    center = a[cross]
+    lo, hi = sorted((a[along], b[along]))
+    lo -= BANK_OVERLAP
+    hi += BANK_OVERLAP
+    start_deck = end_deck = None
+    snapped = None
+    for old in existing:
+        if old.get("axis") != axis:
+            continue
+        for point in (a, b):
+            if abs(point[cross] - old["center"]) > SNAP_DISTANCE:
+                continue
+            if abs(point[along] - old["b"]) <= SNAP_DISTANCE:
+                lo, hi = old["b"] + 1, max(hi, old["b"] + 4)
+                start_deck = old.get("deck_b", old["deck"])
+                snapped = old
+            elif abs(point[along] - old["a"]) <= SNAP_DISTANCE:
+                lo, hi = min(lo, old["a"] - 4), old["a"] - 1
+                end_deck = old.get("deck_a", old["deck"])
+                snapped = old
+            if snapped:
+                break
+        if snapped:
+            center = snapped["center"]
+            style = snapped.get("style", style)
+            integrate = snapped.get("integrate", integrate)
+            break
+    if style == "suspension":
+        ha, hb = terrain.height(*a), terrain.height(*b)
+        if ha is None or hb is None:
+            return None
+        wet = []
+        steps = max(abs(b[0] - a[0]), abs(b[1] - a[1]), 1)
+        for i in range(steps + 1):
+            x = round(a[0] + (b[0] - a[0]) * i / steps)
+            z = round(a[1] + (b[1] - a[1]) * i / steps)
+            if terrain.is_water(x, z):
+                wet.append(terrain.height(x, z))
+        plan = bridge_between(style, a, b, ha, hb, existing, water_level=(max(wet) + 3) if wet else None)
+        plan["bridge"]["integrate"] = False
+        return plan
+    kind = "wood" if style == "wood" else "stone"
+    palette, wood = ("nether" if style == "nether" else "stone"), "spruce"
+    if integrate and world is not None:
+        env_stone, env_wood = environment_palette(world, [a, b])
+        if style != "nether":
+            palette = env_stone
+        wood = env_wood
+    clearance = (4 if integrate else 3) if kind == "stone" else 2
+    prof = _profile(terrain, axis, center, lo, hi, 2, clearance, integrate, start_deck, end_deck)
+    if prof is None:
+        return None
+    structure, y0, pillars = build_profile_bridge(kind, palette, wood, prof, axis)
+    lo, hi = prof["lo"], prof["hi"]
+    world_x, world_z = (lo, center - 2) if axis == "x" else (center - 2, lo)
+    title = BRIDGE_STYLES[style]["title"]
+    material = WOOD_TITLES.get(wood, wood) if kind == "wood" else PALETTE_TITLES[palette]
+    info = {"style": style, "axis": axis, "deck": max(prof["deck"]), "deck_a": prof["deck"][0],
+            "deck_b": prof["deck"][-1], "center": center, "a": lo, "b": hi, "integrate": integrate}
+    structure.bridge = {"style": style, "length": hi - lo + 1, "deck": 4, "width": 5}
+    return {
+        "structure": structure, "world_x": world_x, "world_z": world_z, "y_coord": y0,
+        "name": f"{title}{' integrato' if integrate else ''} in {material} ({hi - lo + 1} blocchi)",
+        "bridge": info, "pillar_columns": pillars, "snapped": snapped is not None,
+    }

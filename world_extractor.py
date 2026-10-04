@@ -16,7 +16,6 @@ import re
 from nbt_codec import save_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String
 from mca_codec import AIR_NAMES
 
-MAX_AREA = 256 * 256
 
 _NATURAL_EXACT = {
     "stone", "granite", "diorite", "andesite", "deepslate", "tuff", "calcite", "dripstone_block", "grass_block",
@@ -59,149 +58,230 @@ def _slug(text):
     return s or "ritaglio"
 
 
-def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False, depth=16):
+def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False, depth=16,
+                 progress=None, cancelled=None):
     """
-    Cuts the area (inclusive world coordinates). Returns (Structure, info) or raises ValueError.
+    Cuts the area (inclusive world coordinates), of any size. Returns (Structure, info) or raises
+    ValueError. The area is read one chunk at a time straight from the decoded sections (each
+    chunk is released right after), what is known about each kind of block is computed once per
+    palette entry, and identical blocks share the same dict, so that large areas are fast and fit
+    in memory. progress(done, total) is called after every chunk; cancelled() can stop the job.
     """
     from structure_manager import Structure
     x1, x2 = sorted((x1, x2))
     z1, z2 = sorted((z1, z2))
     w, l = x2 - x1 + 1, z2 - z1 + 1
-    if w * l > MAX_AREA:
-        raise ValueError(f"Area troppo grande ({w}x{l}): il massimo e' 256x256 blocchi.")
 
-    columns = {}       # (x, z) -> list of (y, block) from top to bottom
-    grounds = {}       # (x, z) -> Y of the natural ground
-    missing = 0
-    data_version = None
-    for x in range(x1, x2 + 1):
-        for z in range(z1, z2 + 1):
-            top = world.surface_y(x, z)
-            if top is None:
-                missing += 1
-                continue
-            if data_version is None:
-                ed = world.editor(x >> 4, z >> 4)
-                data_version = int(ed.nbt.get("DataVersion", 0)) or None
-            col = []
-            ground = None
-            y = top
-            while y >= -64:
-                block = world.get_block(x, y, z)
-                if block is None:
-                    break
-                name = short(str(block.get("Name", "minecraft:air")))
-                col.append((y, block))
-                if ground is None and name not in ("air", "cave_air", "void_air") and is_natural_terrain(name) \
-                        and not _NATURAL_PATTERNS.search(name) and name not in ("snow", "water", "lava"):
-                    ground = y
-                if ground is not None and y <= ground - depth:
-                    break
-                y -= 1
-            columns[(x, z)] = col
-            if ground is not None:
-                grounds[(x, z)] = ground
-    if not columns:
-        raise ValueError("L'area scelta non e' generata in questo mondo.")
+    shared = {}
+    air_block = {"Name": "minecraft:air", "Properties": {}}
+    AIR, GROUND, TREE, LEAVES, WATER, OTHER_NATURAL, BUILT = range(7)
 
-    def built(col_index, col):
-        """Is the block at col[col_index] part of a construction?"""
-        y, block = col[col_index]
-        name = short(str(block.get("Name", "minecraft:air")))
-        if name in ("air", "cave_air", "void_air"):
-            return False
+    def describe(block):
+        """(kind, plain dict, persistent leaves?) of a palette entry."""
+        name = str(block.get("Name", "minecraft:air"))
+        n = short(name)
         props = block.get("Properties") or {}
-        if name.endswith("_leaves"):
-            return str(props.get("persistent", "false")) == "true" or include_trees
-        if _is_tree_part(name):
+        key = (name, tuple(sorted((k, str(v)) for k, v in props.items())))
+        plain = shared.get(key)
+        if plain is None:
+            p = {k: str(v) for k, v in props.items()}
+            if name.endswith("_leaves"):
+                p["persistent"] = "true"    # cut leaves must not decay where they are pasted
+            plain = shared[key] = {"Name": name, "Properties": p}
+        if n in ("air", "cave_air", "void_air"):
+            kind = AIR
+        elif n.endswith("_leaves"):
+            kind = LEAVES
+        elif _is_tree_part(n):
+            kind = TREE
+        elif n == "water":
+            kind = WATER
+        elif is_natural_terrain(n):
+            kind = GROUND if not _NATURAL_PATTERNS.search(n) and n not in ("snow", "lava") else OTHER_NATURAL
+        else:
+            kind = BUILT
+        persistent = str(props.get("persistent", "false")) == "true"
+        return kind, plain, persistent
+
+    def built(i, col):
+        """Is col[i] = (y, kind, plain, persistent) part of a construction?"""
+        _, kind, _, persistent = col[i]
+        if kind == BUILT:
+            return True
+        if kind == LEAVES:
+            return persistent or include_trees
+        if kind == TREE:
             if include_trees:
                 return True
             # a trunk goes up into natural leaves; a post of a house goes into a roof
-            for j in range(col_index - 1, -1, -1):
-                above = short(str(col[j][1].get("Name", "")))
-                if _is_tree_part(above):
+            for j in range(i - 1, -1, -1):
+                k2 = col[j][1]
+                if k2 == TREE:
                     continue
-                return not (above.endswith("_leaves") and
-                            str((col[j][1].get("Properties") or {}).get("persistent", "false")) != "true")
+                return not (k2 == LEAVES and not col[j][3])
             return True
-        return not is_natural_terrain(name)
+        return False
 
-    blocks = {}
+    out = []            # (x, absolute y, z, block)
+    grounds = []
+    missing = 0
+    data_version = None
+    top_max = None
+    lowest = None
+    chunks = [(cx, cz) for cx in range(x1 >> 4, (x2 >> 4) + 1) for cz in range(z1 >> 4, (z2 >> 4) + 1)]
+    for n, (cx, cz) in enumerate(chunks):
+        if cancelled and cancelled():
+            raise ValueError("Ritaglio annullato.")
+        xs = range(max(x1, cx * 16), min(x2, cx * 16 + 15) + 1)
+        zs = range(max(z1, cz * 16), min(z2, cz * 16 + 15) + 1)
+        ed = world.editor(cx, cz)
+        if ed is None:
+            missing += len(xs) * len(zs)
+        else:
+            if data_version is None:
+                data_version = int(ed.nbt.get("DataVersion", 0)) or None
+            sections = {}                       # sy -> (indices, metas) or None
+
+            def section(sy):
+                if sy not in sections:
+                    entry = ed._load(sy)
+                    sections[sy] = None if entry is None else (entry[1], [describe(b) for b in entry[0]])
+                return sections[sy]
+
+            for x in xs:
+                for z in zs:
+                    top = world.surface_y(x, z)
+                    if top is None:
+                        missing += 1
+                        continue
+                    lx, lz = x & 15, z & 15
+                    col = []
+                    ground = None
+                    y = top
+                    while y >= -64:
+                        sec = section(y >> 4)
+                        if sec is None:
+                            break
+                        kind, plain, persistent = sec[1][sec[0][((y & 15) << 8) | (lz << 4) | lx]]
+                        col.append((y, kind, plain, persistent))
+                        if ground is None and kind == GROUND:
+                            ground = y
+                        if ground is not None and y <= ground - depth:
+                            break
+                        y -= 1
+                    if not col:
+                        missing += 1
+                        continue
+                    if ground is not None:
+                        grounds.append(ground)
+                    rx, rz = x - x1, z - z1
+                    if mode == "tutto":
+                        top_max = col[0][0] if top_max is None else max(top_max, col[0][0])
+                        lowest = col[-1][0] if lowest is None else min(lowest, col[-1][0])
+                        for y, kind, plain, _ in col:
+                            out.append((rx, y, rz, plain))
+                        continue
+                    flags = [built(i, col) for i in range(len(col))]
+                    ys = [col[i][0] for i in range(len(col)) if flags[i]]
+                    if not ys:
+                        continue
+                    lo, hi = min(ys), max(ys)
+                    for i, (y, kind, plain, _) in enumerate(col):
+                        if not lo <= y <= hi:
+                            continue
+                        if flags[i] or kind == WATER:
+                            out.append((rx, y, rz, plain))     # water: pools and fountains inside
+                        elif kind == AIR:
+                            out.append((rx, y, rz, air_block))
+                        # natural terrain -> structure void
+        world.forget_chunk(cx, cz)
+        if progress:
+            progress(n + 1, len(chunks))
+
     if mode == "tutto":
-        y_lo = min(grounds.values()) - 2 if grounds else min(c[-1][0] for c in columns.values())
-        y_hi = max(c[0][0] for c in columns.values())
-        for (x, z), col in columns.items():
-            for y, block in col:
-                if y_lo <= y <= y_hi:
-                    b = _plain(block)
-                    if b["Name"].endswith("_leaves"):
-                        b["Properties"]["persistent"] = "true"
-                    blocks[(x - x1, y - y_lo, z - z1)] = b
+        if top_max is None:
+            raise ValueError("L'area scelta non e' generata in questo mondo.")
+        y_lo = min(grounds) - 2 if grounds else lowest
+        y_hi = top_max
     else:
-        per_col = {}
-        for key, col in columns.items():
-            ys = [col[i][0] for i in range(len(col)) if built(i, col)]
-            if ys:
-                per_col[key] = (min(ys), max(ys))
-        if not per_col:
+        if not out:
+            if missing == w * l:
+                raise ValueError("L'area scelta non e' generata in questo mondo.")
             raise ValueError("Nell'area non ci sono costruzioni: prova la modalita' 'Tutto, terreno compreso'.")
-        y_lo = min(lo for lo, _ in per_col.values())
-        y_hi = max(hi for _, hi in per_col.values())
-        for key, (lo, hi) in per_col.items():
-            col = columns[key]
-            for i, (y, block) in enumerate(col):
-                if not lo <= y <= hi:
-                    continue
-                name = short(str(block.get("Name", "minecraft:air")))
-                if built(i, col):
-                    b = _plain(block)
-                    if b["Name"].endswith("_leaves"):
-                        b["Properties"]["persistent"] = "true"
-                elif name in ("air", "cave_air", "void_air"):
-                    b = {"Name": "minecraft:air", "Properties": {}}
-                elif name == "water":
-                    b = _plain(block)   # pools and fountains inside the build
-                else:
-                    continue            # natural terrain -> structure void
-                blocks[(key[0] - x1, y - y_lo, key[1] - z1)] = b
-
-    ground_list = sorted(grounds.values())
+        y_lo = min(t[1] for t in out)
+        y_hi = max(t[1] for t in out)
+    blocks = {}
+    count = 0
+    out.reverse()
+    while out:
+        rx, y, rz, b = out.pop()
+        if y >= y_lo:
+            blocks[(rx, y - y_lo, rz)] = b
+            if b["Name"] != "minecraft:air":
+                count += 1
+    ground_list = sorted(grounds)
     median_ground = ground_list[len(ground_list) // 2] if ground_list else y_lo - 1
     ground_offset = max(0, median_ground + 1 - y_lo)
     struct = Structure(w, y_hi - y_lo + 1, l, blocks, data_version)
     struct.ground_offset = ground_offset
-    info = {"blocks": sum(1 for b in blocks.values() if b["Name"] != "minecraft:air"), "missing_columns": missing,
-            "y_range": (y_lo, y_hi), "ground_offset": ground_offset, "mode": mode}
+    info = {"blocks": count, "missing_columns": missing, "y_range": (y_lo, y_hi),
+            "ground_offset": ground_offset, "mode": mode}
     return struct, info
 
 
 def save_structure(struct, path, extra=None):
-    """Writes a Structure as a vanilla structure-block .nbt file (+ MinecraftBuilder metadata)."""
-    palette, index, blocks = [], {}, []
-    for (x, y, z) in sorted(struct.blocks, key=lambda p: (p[1], p[2], p[0])):
-        b = struct.blocks[(x, y, z)]
+    """
+    Writes a Structure as a vanilla structure-block .nbt file (+ MinecraftBuilder metadata).
+    The block list is written directly as bytes, without a tag object per block, so even
+    structures with millions of blocks are saved quickly and with little memory.
+    """
+    import gzip
+    import struct as st
+    from nbt_codec import nbt_to_bytes
+    palette, index, by_obj = [], {}, {}
+    for b in struct.blocks.values():
+        if id(b) in by_obj:
+            continue
         props = b.get("Properties") or {}
-        key = (b["Name"], tuple(sorted((k, str(v)) for k, v in props.items())))
-        if key not in index:
-            index[key] = len(palette)
+        key = (b["Name"], tuple(sorted((p, str(v)) for p, v in props.items())))
+        idx = index.get(key)
+        if idx is None:
+            idx = index[key] = len(palette)
             entry = TAG_Compound({"Name": TAG_String(b["Name"])})
             if props:
-                entry["Properties"] = TAG_Compound({k: TAG_String(str(v)) for k, v in sorted(props.items())})
+                entry["Properties"] = TAG_Compound({p: TAG_String(str(v)) for p, v in sorted(props.items())})
             palette.append(entry)
-        blocks.append(TAG_Compound({"pos": TAG_List(3, [TAG_Int(x), TAG_Int(y), TAG_Int(z)]),
-                                    "state": TAG_Int(index[key])}))
-    root = TAG_Compound()
-    root["DataVersion"] = TAG_Int(struct.data_version or 3955)
-    root["size"] = TAG_List(3, [TAG_Int(struct.width), TAG_Int(struct.height), TAG_Int(struct.length)])
-    root["palette"] = TAG_List(10, palette)
-    root["blocks"] = TAG_List(10, blocks)
-    root["entities"] = TAG_List(10, [])
+        by_obj[id(b)] = idx
+    head = TAG_Compound()
+    head["DataVersion"] = TAG_Int(struct.data_version or 3955)
+    head["size"] = TAG_List(3, [TAG_Int(struct.width), TAG_Int(struct.height), TAG_Int(struct.length)])
+    head["palette"] = TAG_List(10, palette)
+    head["entities"] = TAG_List(10, [])
     meta = TAG_Compound({"groundOffset": TAG_Int(getattr(struct, "ground_offset", 0))})
     for k, v in (extra or {}).items():
         meta[k] = TAG_String(str(v))
-    root["MinecraftBuilder"] = meta
+    head["MinecraftBuilder"] = meta
+    body = nbt_to_bytes(head, "")          # 0x0a, name, tags..., 0x00
+    out = bytearray(body[:-1])             # reopen the root compound to append "blocks"
+    positions = sorted(struct.blocks, key=lambda p: (p[1], p[2], p[0]))
+    out += b"\x09" + st.pack(">H", 6) + b"blocks" + b"\x0a" + st.pack(">i", len(positions))
+    pos_head = b"\x09" + st.pack(">H", 3) + b"pos" + b"\x03" + st.pack(">i", 3)
+    state_head = b"\x03" + st.pack(">H", 5) + b"state"
+    pack3 = st.Struct(">iii").pack
+    pack1 = st.Struct(">i").pack
+    blocks = struct.blocks
+    for p in positions:
+        out += pos_head
+        out += pack3(*p)
+        out += state_head
+        out += pack1(by_obj[id(blocks[p])])
+        out += b"\x00"
+    out += b"\x00"
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    save_nbt(root, "", path, compressed=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(gzip.compress(bytes(out), compresslevel=6))
+    os.replace(tmp, path)
     return path
 
 

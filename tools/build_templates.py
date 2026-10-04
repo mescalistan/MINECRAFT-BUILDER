@@ -50,7 +50,8 @@ def write_catalog(reg):
         entries.append({
             "file": f"{name}.nbt",
             "title": entry["title"],
-            "category": catalog.category_for(name),
+            "category": catalog.CATEGORY_OF.get(name) or (
+                entry["category"] if entry["category"] in catalog.CATEGORIES else "Altro"),
             "description": entry["description"],
         })
     with open(CATALOG_PATH, "w", encoding="utf-8") as f:

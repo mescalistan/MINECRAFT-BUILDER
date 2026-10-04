@@ -287,7 +287,14 @@ class TemplateLibraryTests(unittest.TestCase):
         try:
             make_region(tmp, 0, 0)
             world = World(tmp)
-            names = sorted(f[:-4] for f in os.listdir(TEMPLATES) if f.endswith(".nbt"))
+            import json
+            try:
+                with open(os.path.join(TEMPLATES, "user_catalog.json"), encoding="utf-8") as f:
+                    user_files = {e["file"] for e in json.load(f)}
+            except (OSError, ValueError):
+                user_files = set()
+            # the user's own cuts and saved structures are not part of the library under test
+            names = sorted(f[:-4] for f in os.listdir(TEMPLATES) if f.endswith(".nbt") and f not in user_files)
             placements = []
             ox = oz = row_depth = 0
             for name in names:
@@ -317,6 +324,8 @@ class TemplateLibraryTests(unittest.TestCase):
                     expected_props = {k: str(v) for k, v in block.get("Properties", {}).items()}
                     got_props = {k: str(v) for k, v in got.get("Properties", {}).items()}
                     expected_name = upgrade_block(block, 3955)["Name"]
+                    if expected_name in ("minecraft:cave_air", "minecraft:void_air"):
+                        expected_name = "minecraft:air"
                     self.assertEqual((got["Name"], got_props), (expected_name, expected_props),
                                      f"{p['name']} {(x, y, z)}")
         finally:

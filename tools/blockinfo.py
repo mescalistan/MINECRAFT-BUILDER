@@ -73,7 +73,8 @@ jukebox note_block beacon conduit bell campfire soul_campfire respawn_anchor lod
 torch wall_torch soul_torch soul_wall_torch redstone_torch redstone_wall_torch lantern soul_lantern
 end_rod lightning_rod ladder scaffolding cobweb water lava bubble_column
 rail powered_rail detector_rail activator_rail redstone_wire redstone_lamp lever hopper dropper
-dispenser observer piston sticky_piston tripwire tripwire_hook daylight_detector
+dispenser observer piston sticky_piston piston_head tripwire tripwire_hook daylight_detector repeater comparator
+calibrated_sculk_sensor note_block copper_bulb waxed_copper_bulb
 nether_portal end_portal end_portal_frame end_gateway spawner dragon_egg
 flower_pot potted_poppy potted_dandelion potted_blue_orchid potted_allium potted_azure_bluet
 potted_red_tulip potted_orange_tulip potted_white_tulip potted_pink_tulip potted_oxeye_daisy
@@ -380,6 +381,21 @@ def allowed_properties(n):
         "vine": {**{d: BOOL for d in HORIZONTAL}, "up": BOOL},
         "carved_pumpkin": {"facing": HORIZONTAL}, "jack_o_lantern": {"facing": HORIZONTAL},
         "redstone_lamp": {"lit": BOOL},
+        "repeater": {"delay": {"1", "2", "3", "4"}, "facing": HORIZONTAL, "locked": BOOL, "powered": BOOL},
+        "comparator": {"facing": HORIZONTAL, "mode": {"compare", "subtract"}, "powered": BOOL},
+        "redstone_wire": {**{d: {"up", "side", "none"} for d in HORIZONTAL},
+                          "power": {str(i) for i in range(16)}},
+        "sculk_sensor": {"sculk_sensor_phase": {"inactive", "active", "cooldown"},
+                         "power": {str(i) for i in range(16)}, **wl},
+        "calibrated_sculk_sensor": {"sculk_sensor_phase": {"inactive", "active", "cooldown"}, "facing": HORIZONTAL,
+                                    "power": {str(i) for i in range(16)}, **wl},
+        "daylight_detector": {"inverted": BOOL, "power": {str(i) for i in range(16)}},
+        "piston": {"facing": ALL_DIRS, "extended": BOOL}, "sticky_piston": {"facing": ALL_DIRS, "extended": BOOL},
+        "observer": {"facing": ALL_DIRS, "powered": BOOL},
+        "copper_bulb": {"lit": BOOL, "powered": BOOL}, "waxed_copper_bulb": {"lit": BOOL, "powered": BOOL},
+        "lever": {"face": {"floor", "wall", "ceiling"}, "facing": HORIZONTAL, "powered": BOOL},
+        "tripwire_hook": {"attached": BOOL, "facing": HORIZONTAL, "powered": BOOL},
+        "note_block": {"instrument": None, "note": {str(i) for i in range(25)}, "powered": BOOL},
         "sea_pickle": {"pickles": {"1", "2", "3", "4"}, **wl},
         "amethyst_cluster": {"facing": ALL_DIRS, **wl},
         "hopper": {"facing": {"down", "north", "south", "east", "west"}, "enabled": BOOL},

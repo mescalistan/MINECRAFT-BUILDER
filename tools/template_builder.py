@@ -515,9 +515,47 @@ class Builder:
             updates[(x, y, z)] = (n, new)
         self.cells.update(updates)
 
+    def connect_redstone(self):
+        """Side connections of redstone dust (the game does not recompute them for injected blocks)."""
+        sources = ("sculk_sensor", "calibrated_sculk_sensor", "daylight_detector", "lever", "redstone_torch",
+                   "redstone_wall_torch", "redstone_block", "target", "observer", "tripwire_hook")
+        updates = {}
+        for (x, y, z), (n, props) in self.cells.items():
+            if n != "minecraft:redstone_wire":
+                continue
+            links = {}
+            for d, (dx, dz) in DIRS.items():
+                nb, nprops = self.cells.get((x + dx, y, z + dz), (None, {}))
+                ok = False
+                if nb == "minecraft:redstone_wire":
+                    ok = True
+                elif nb in ("minecraft:repeater", "minecraft:comparator", "minecraft:observer"):
+                    ok = nprops.get("facing") in (d, OPPOSITE[d])
+                elif nb and nb.split(":", 1)[1] in sources:
+                    ok = True
+                elif not _is_solid(self.get(x, y + 1, z)):
+                    # dust one block higher on the next block (step up)
+                    ok = self.get(x + dx, y + 1, z + dz) == "minecraft:redstone_wire"
+                if not ok and not _is_solid(nb) and self.get(x + dx, y - 1, z + dz) == "minecraft:redstone_wire":
+                    ok = True  # step down
+                links[d] = ok
+            linked = [d for d, ok in links.items() if ok]
+            if len(linked) == 1:
+                links[OPPOSITE[linked[0]]] = True
+            if not linked:
+                links = {d: True for d in links}
+            new = dict(props)
+            for d, ok in links.items():
+                up = ok and self.get(x + DIRS[d][0], y + 1, z + DIRS[d][1]) == "minecraft:redstone_wire"
+                new[d] = "up" if up else "side" if ok else "none"
+            new.setdefault("power", "0")
+            updates[(x, y, z)] = (n, new)
+        self.cells.update(updates)
+
     def finalize(self):
         self.connect_states()
         self.stair_shapes()
+        self.connect_redstone()
 
     # ---- export ----
     def to_nbt(self):

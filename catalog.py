@@ -63,6 +63,13 @@ CATEGORY_OF = {
     "ruined_portal": "Rovine e portali", "ancient_city_portal": "Rovine e portali",
     # Fantascienza
     "space_station": "Fantascienza", "sky_fan": "Fantascienza",
+    # Strutture vetrina
+    "himeji_castle": "Castelli e fortezze", "city_gate": "Castelli e fortezze",
+    "santorini_villa": "Case", "cottage_garden": "Case", "victorian_mansion": "Case", "alpine_chalet": "Case",
+    "red_barn": "Fattorie e animali", "watermill": "Fattorie e animali",
+    "stave_church": "Templi e luoghi sacri", "chinese_pavilion": "Piazze e decorazioni",
+    "cherry_temple": "Templi e luoghi sacri", "kinkaku_ji": "Templi e luoghi sacri",
+    "neuschwanstein": "Castelli e fortezze",
 }
 
 # Strutture originali del repository (non generate dagli script)

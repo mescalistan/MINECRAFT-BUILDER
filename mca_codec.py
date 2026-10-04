@@ -7,7 +7,7 @@ import shutil
 from collections.abc import MutableMapping
 
 from nbt_codec import (
-    parse_nbt_bytes, nbt_to_bytes, TAG_Compound, TAG_List, TAG_Byte,
+    parse_nbt_bytes, nbt_to_bytes, TAG_Compound, TAG_List, TAG_Byte, TAG_Int,
     TAG_Long_Array, TAG_String,
 )
 
@@ -498,6 +498,41 @@ def recalculate_heightmaps(chunk_nbt):
         hm.pop(key, None)
 
 
+# Blocks that need a block entity to work (ticking detectors, sensors, containers...). Chunks written
+# by the program get a minimal one; the game fills in the defaults.
+_BLOCK_ENTITY_IDS = {
+    "chest": "chest", "trapped_chest": "trapped_chest", "barrel": "barrel", "furnace": "furnace",
+    "smoker": "smoker", "blast_furnace": "blast_furnace", "hopper": "hopper", "dispenser": "dispenser",
+    "dropper": "dropper", "brewing_stand": "brewing_stand", "lectern": "lectern", "beacon": "beacon",
+    "bell": "bell", "campfire": "campfire", "soul_campfire": "campfire", "enchanting_table": "enchanting_table",
+    "ender_chest": "ender_chest", "jukebox": "jukebox", "daylight_detector": "daylight_detector",
+    "sculk_sensor": "sculk_sensor", "calibrated_sculk_sensor": "calibrated_sculk_sensor",
+    "sculk_catalyst": "sculk_catalyst", "sculk_shrieker": "sculk_shrieker", "comparator": "comparator",
+    "spawner": "mob_spawner", "decorated_pot": "decorated_pot", "chiseled_bookshelf": "chiseled_bookshelf",
+    "crafter": "crafter", "beehive": "beehive", "bee_nest": "beehive", "conduit": "conduit",
+}
+
+
+def block_entity_id(name):
+    short = name.split(":", 1)[-1]
+    be = _BLOCK_ENTITY_IDS.get(short)
+    if be:
+        return "minecraft:" + be
+    if short.endswith("_bed"):
+        return "minecraft:bed"
+    if short.endswith("_hanging_sign") or short.endswith("_wall_hanging_sign"):
+        return "minecraft:hanging_sign"
+    if short.endswith("_sign"):
+        return "minecraft:sign"
+    if short.endswith("_banner"):
+        return "minecraft:banner"
+    if short.endswith("shulker_box"):
+        return "minecraft:shulker_box"
+    if short.endswith(("_skull", "_head")) and "piston" not in short:
+        return "minecraft:skull"
+    return None
+
+
 class ChunkEditor:
     """
     Batched block editing of one chunk: every section is unpacked once,
@@ -578,13 +613,19 @@ class ChunkEditor:
             sec.pop("SkyLight", None)
         self.nbt["isLightOn"] = TAG_Byte(0)
 
-        # Remove block entities (chest contents, signs...) of overwritten blocks
-        be_list = self.nbt.get("block_entities")
-        if be_list:
-            kept = [be for be in be_list
-                    if (int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))) not in self.changed]
-            if len(kept) != len(be_list):
-                self.nbt["block_entities"] = TAG_List(10, kept)
+        # Remove block entities (chest contents, signs...) of overwritten blocks, and add an empty
+        # one for the new blocks that need it (detectors and sensors would not tick without it)
+        be_list = self.nbt.get("block_entities") or []
+        kept = [be for be in be_list
+                if (int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))) not in self.changed]
+        for (x, y, z) in self.changed:
+            state = self.get_block(x - self.chunk_x * 16, y, z - self.chunk_z * 16)
+            be_id = block_entity_id(str(state.get("Name", ""))) if state is not None else None
+            if be_id:
+                kept.append(TAG_Compound({"id": TAG_String(be_id), "x": TAG_Int(x), "y": TAG_Int(y),
+                                          "z": TAG_Int(z), "keepPacked": TAG_Byte(0)}))
+        if len(kept) != len(be_list) or any(k is not o for k, o in zip(kept, be_list)):
+            self.nbt["block_entities"] = TAG_List(10, kept)
 
         recalculate_heightmaps(self.nbt)
         self._dirty_secs.clear()

@@ -294,72 +294,18 @@ def gothic_cathedral():
     return b
 
 
-@template("viking_longhouse", "Viking Longhouse", "Medieval",
-          "Casa lunga vichinga a forma di scafo con focolare centrale, panche, letti e teste di drago sul tetto.")
-def viking_longhouse():
-    W, L = 13, 27
-    b = Builder(W, 12, L)
-    c = W // 2
-    for z in range(1, L - 1):
-        t = (z - 1) / (L - 3)
-        half = 3 + int(round(2 * math.sin(math.pi * t)))
-        x1, x2 = c - half, c + half
-        b.fill(x1, 0, z, x2, 0, z, "spruce_planks")
-        for y in range(1, 4):
-            b.set(x1, y, z, "spruce_log", axis="y")
-            b.set(x2, y, z, "spruce_log", axis="y")
-            b.clear(x1 + 1, y, z, x2 - 1, y, z)
-        for k in range(0, half + 1):
-            y = 4 + k
-            if k == half:
-                b.set(c, y, z, "dark_oak_planks")
-            else:
-                b.stair(c - half + k, y, z, "dark_oak", "east")
-                b.stair(c + half - k, y, z, "dark_oak", "west")
-                for x in range(c - half + k + 1, c + half - k):
-                    b.set_if_empty(x, y, z, AIR)
-    for z in (1, L - 2):
-        b.fill(c - 3, 1, z, c + 3, 6, z, "spruce_planks")
-        b.clear(c - 2, 4, z, c + 2, 6, z)
-        b.fill(c - 3, 4, z, c + 3, 4, z, "spruce_log", axis="x")
-    for z in (0, L - 1):
-        b.set(c, 7, z, "dark_oak_fence")
-        b.set(c, 8, z, "dark_oak_fence")
-        b.set(c - 1, 8, z, "dark_oak_fence")
-        b.set(c + 1, 8, z, "dark_oak_fence")
-    b.entrance(c, 1, L - 2, "north", wood="spruce", step="cobblestone")
-    b.entrance(c, 1, 1, "south", wood="spruce", step="cobblestone")
-    # Focolare centrale
-    m = L // 2
-    b.fill(c - 1, 0, m - 1, c + 1, 0, m + 1, "cobblestone")
-    b.set(c, 1, m, "campfire", lit="true", signal_fire="false", facing="north", waterlogged="false")
-    b.set(c, 8, m, "cobblestone_wall")
-    for z in range(4, L - 4):
-        if abs(z - m) > 2:
-            b.stair(c - 3, 1, z, "spruce", "west")
-            b.stair(c + 3, 1, z, "spruce", "east")
-    b.bed(c - 3, 1, 4, "north", color="brown")
-    b.bed(c + 3, 1, 4, "north", color="brown")
-    b.chest(c - 2, 1, L - 4, "north")
-    b.set(c + 2, 1, L - 4, "barrel", facing="up", open="false")
-    for z in (6, L - 7):
-        b.lantern(c, 1, z)
-    b.lantern(c - 2, 1, m)
-    return b
-
-
 @template("tudor_house", "Tudor House", "House",
           "Casa Tudor a graticcio con piano superiore sporgente, tetto ripido, camino e due piani arredati.")
 def tudor_house():
     b = Builder(13, 17, 13)
     b.room(2, 0, 2, 10, 5, 10, "cobblestone", floor="stone_bricks", ceiling="dark_oak_planks")
-    b.walls(2, 2, 2, 10, 4, 10, "white_terracotta")
+    b.walls(2, 2, 2, 10, 4, 10, "mushroom_stem")
     for x in (2, 5, 7, 10):
         for z in (2, 10):
             b.fill(x, 1, z, x, 4, z, "dark_oak_log", axis="y")
             b.fill(z, 1, x, z, 4, x, "dark_oak_log", axis="y")
     # Piano superiore sporgente
-    b.room(1, 5, 1, 11, 10, 11, "white_terracotta", floor="dark_oak_planks", ceiling="dark_oak_planks")
+    b.room(1, 5, 1, 11, 10, 11, "mushroom_stem", floor="dark_oak_planks", ceiling="dark_oak_planks")
     for i in range(1, 12, 2):
         for x, z in ((i, 1), (i, 11), (1, i), (11, i)):
             b.fill(x, 6, z, x, 9, z, "dark_oak_log", axis="y")

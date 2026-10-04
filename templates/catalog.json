@@ -1,9 +1,21 @@
 [
  {
+  "file": "alpine_chalet.nbt",
+  "title": "Alpine Chalet",
+  "category": "Case",
+  "description": "Chalet alpino: basamento in pietra, piano in legno con balcone avvolgente, tetto largo e spiovente con grandi gronde, camino e caminetto."
+ },
+ {
   "file": "blacksmith_forge.nbt",
   "title": "Blacksmith Forge",
   "category": "Case",
   "description": "Fucina aperta con altoforno, incudine, banco da forgiatura e camino fumante."
+ },
+ {
+  "file": "cottage_garden.nbt",
+  "title": "Cottage with Garden",
+  "category": "Case",
+  "description": "Cottage inglese con tetto di paglia, muri in pietra e graticcio, camino, giardino fiorito con staccionata, pozzetto, arnia e melo."
  },
  {
   "file": "hobbit_hole.nbt",
@@ -15,7 +27,7 @@
   "file": "igloo.nbt",
   "title": "Igloo",
   "category": "Case",
-  "description": "Igloo di neve con tunnel d'ingresso, letto, fornace, banco da lavoro e tappeti."
+  "description": "Igloo a cupola liscia con tunnel arrotondato, finestre di vetro azzurro, pavimento in legno, letto, fornace, banco da lavoro, cassa, tappeti, lanterne e abeti innevati."
  },
  {
   "file": "medieval_tavern.nbt",
@@ -36,6 +48,12 @@
   "description": "Casa del villaggio delle pianure: fondamenta in pietrisco, travi di quercia, fioriere e arredamento."
  },
  {
+  "file": "santorini_villa.nbt",
+  "title": "Santorini Villa",
+  "category": "Case",
+  "description": "Villa cicladica di Santorini: terrazze imbiancate, cappella con cupola blu e campaniletto, piscina, porte e persiane turchesi e buganvillee rosa."
+ },
+ {
   "file": "starter_cottage.nbt",
   "title": "Starter Cottage",
   "category": "Case",
@@ -54,10 +72,16 @@
   "description": "Casa Tudor a graticcio con piano superiore sporgente, tetto ripido, camino e due piani arredati."
  },
  {
+  "file": "victorian_mansion.nbt",
+  "title": "Victorian Mansion",
+  "category": "Case",
+  "description": "Villa vittoriana in stile 'painted lady': tre piani pastello con finiture bianche, torretta d'angolo con tetto conico, bovindo, veranda a colonne, comignoli e abbaini."
+ },
+ {
   "file": "viking_longhouse.nbt",
   "title": "Viking Longhouse",
   "category": "Case",
-  "description": "Casa lunga vichinga a forma di scafo con focolare centrale, panche, letti e teste di drago sul tetto."
+  "description": "Casa lunga vichinga a forma di scafo: zoccolo di pietra, pareti di tronchi, tetto spiovente con colmo e corna di drago, timpani a travi, lungo focolare, panche, letti e catasta di legna."
  },
  {
   "file": "witch_hut.nbt",
@@ -90,6 +114,24 @@
   "description": "Tratto della Grande Muraglia cinese con camminamento merlato e torre di guardia abitabile."
  },
  {
+  "file": "himeji_castle.nbt",
+  "title": "Japanese Castle (Himeji)",
+  "category": "Castelli e fortezze",
+  "description": "Castello giapponese ispirato a Himeji: basamento di pietra a scarpa, quattro piani bianchi con tetti a gronda ricurva, timpani decorativi e pesci d'oro sul colmo."
+ },
+ {
+  "file": "city_gate.nbt",
+  "title": "Medieval City Gate",
+  "category": "Castelli e fortezze",
+  "description": "Porta di citta' medievale: grande arco con saracinesca, due torri merlate con tetti a punta, stendardi, mura con camminamento e scale interne."
+ },
+ {
+  "file": "neuschwanstein.nbt",
+  "title": "Neuschwanstein Castle",
+  "category": "Castelli e fortezze",
+  "description": "Castello fiabesco ispirato a Neuschwanstein su uno sperone di roccia: palazzo bianco a tre piani con tetto d'ardesia, torre altissima con belvedere, torrette a cono, corpo di guardia in mattoni rossi, cortile e scalinata d'accesso."
+ },
+ {
   "file": "pillager_outpost.nbt",
   "title": "Pillager Outpost",
   "category": "Castelli e fortezze",
@@ -120,22 +162,34 @@
   "description": "Scuderia in abete con sei box, cancelli, fieno, abbeveratoi, cassa per selle e tetto a capanna."
  },
  {
+  "file": "red_barn.nbt",
+  "title": "Red Barn and Silo",
+  "category": "Fattorie e animali",
+  "description": "Grande fienile rosso con tetto a mansarda, finiture bianche, fienile soppalcato, box per animali e silo in mattoni con cupola."
+ },
+ {
   "file": "sugar_cane_farm.nbt",
   "title": "Sugar Cane Farm",
   "category": "Fattorie e animali",
   "description": "Piantagione di canna da zucchero: file di sabbia irrigate, recinto con cancello e lampioni."
  },
  {
+  "file": "watermill.nbt",
+  "title": "Watermill",
+  "category": "Fattorie e animali",
+  "description": "Mulino ad acqua con grande ruota a pale sul canale, basamento in pietra, piano a graticcio, macina, sacchi di farina e soppalco."
+ },
+ {
   "file": "arc_de_triomphe.nbt",
   "title": "Arc de Triomphe",
   "category": "Monumenti",
-  "description": "Arco di Trionfo di Parigi con fornice principale, archi laterali, rilievi e terrazza panoramica."
+  "description": "Arco di Trionfo di Parigi: grande fornice con archivolto scolpito, archi laterali, gruppi in rilievo sui piloni, cornice, attico e terrazza panoramica raggiungibile con una scala interna."
  },
  {
   "file": "colosseum.nbt",
   "title": "Colosseum",
   "category": "Monumenti",
-  "description": "Colosseo di Roma: anello ellittico a quattro ordini di arcate, gradinate, arena e un lato in rovina."
+  "description": "Colosseo di Roma: anello ellittico con tre ordini di arcate regolari e attico, corridoi interni illuminati, gradinate, podio e arena, quattro ingressi e il lato in rovina."
  },
  {
   "file": "dutch_windmill.nbt",
@@ -153,7 +207,7 @@
   "file": "moai_heads.nbt",
   "title": "Moai of Easter Island",
   "category": "Monumenti",
-  "description": "Tre statue Moai dell'Isola di Pasqua su un ahu di pietra, una con il pukao rosso."
+  "description": "Cinque Moai dell'Isola di Pasqua su un ahu cerimoniale: volti allungati con arcata sopraccigliare, naso, labbra imbronciate, orbite profonde, orecchie lunghe, braccia scolpite e pukao rossi."
  },
  {
   "file": "stonehenge.nbt",
@@ -172,6 +226,12 @@
   "title": "Pirate Ship",
   "category": "Navi",
   "description": "Galeone pirata con scafo in quercia scura, due alberi con vele, coffa, cabina del capitano, cannoni e stiva."
+ },
+ {
+  "file": "chinese_pavilion.nbt",
+  "title": "Chinese Pavilion and Pond",
+  "category": "Piazze e decorazioni",
+  "description": "Padiglione cinese a colonne rosse con tetto a gronde ricurve su un isolotto, laghetto con ninfee, ponticello a zig-zag e lanterne di pietra."
  },
  {
   "file": "desert_well.nbt",
@@ -231,19 +291,19 @@
   "file": "ancient_city_portal.nbt",
   "title": "Ancient City Portal",
   "category": "Rovine e portali",
-  "description": "Il grande portale della citta' antica in ardesia rinforzata, con sculk, lanterne dell'anima e casse."
+  "description": "Il grande portale della citta' antica: sagoma a gradoni in ardesia rinforzata spessa tre blocchi, basamento con scalini, sculk, ali laterali, lanterne dell'anima, candele e casse."
  },
  {
   "file": "ruined_portal.nbt",
   "title": "Ruined Portal",
   "category": "Rovine e portali",
-  "description": "Portale in rovina con cornice di ossidiana spezzata, netherrack, magma, oro e cassa del bottino."
+  "description": "Grande portale in rovina come quelli del gioco: cornice di ossidiana spezzata con ossidiana piangente, basamento di mattoni crepati, chiazza di netherrack e magma, frammenti caduti, oro e cassa."
  },
  {
   "file": "desert_temple.nbt",
   "title": "Desert Temple",
   "category": "Templi e luoghi sacri",
-  "description": "Tempio del deserto con torri decorate in terracotta, sala centrale a mosaico e quattro casse del tesoro."
+  "description": "Tempio del deserto: torri angolari a fasce di terracotta con il volto decorato, facciata a colonne, lesene, piramide a gradoni sul tetto, sala a mosaico con colonne e quattro casse del tesoro."
  },
  {
   "file": "el_castillo.nbt",
@@ -258,16 +318,34 @@
   "description": "Pagoda giapponese a cinque piani con gronde ricurve, pilastro centrale e guglia sorin."
  },
  {
+  "file": "kinkaku_ji.nbt",
+  "title": "Golden Pavilion (Kinkaku-ji)",
+  "category": "Templi e luoghi sacri",
+  "description": "Padiglione d'Oro di Kyoto affacciato sullo stagno: primo piano in legno e intonaco, due piani dorati con balconata, tetti scuri a gronda, fenice d'oro, isola con pino, sentiero e lanterne di pietra."
+ },
+ {
   "file": "gothic_cathedral.nbt",
   "title": "Gothic Cathedral",
   "category": "Templi e luoghi sacri",
   "description": "Cattedrale gotica ispirata a Notre-Dame: navata alta, archi rampanti, rosone, vetrate colorate e due torri."
  },
  {
+  "file": "cherry_temple.nbt",
+  "title": "Japanese Cherry Temple",
+  "category": "Templi e luoghi sacri",
+  "description": "Tempio-castello giapponese a tre piani: pareti bianche con pilastri di ciliegio, tetti a gronda in mattoni del Nether, pavimenti in mangrovia, basamento di pietra, ciliegi in fiore e lanterne di pietra."
+ },
+ {
   "file": "jungle_temple.nbt",
   "title": "Jungle Temple",
   "category": "Templi e luoghi sacri",
-  "description": "Tempio della giungla in pietrisco muschioso su due livelli, con viticci, scalinata e cassa."
+  "description": "Tempio della giungla a tre gradoni in pietrisco muschioso con cornici, merlature, padiglione sul tetto, scalinata interna, colonne scolpite, viticci e due casse del tesoro."
+ },
+ {
+  "file": "stave_church.nbt",
+  "title": "Norwegian Stave Church",
+  "category": "Templi e luoghi sacri",
+  "description": "Chiesa norvegese in legno (stavkirke) ispirata a Borgund: tetti a scandole sovrapposti, galleria porticata, torretta a pagoda e teste di drago sui colmi."
  },
  {
   "file": "onion_dome_cathedral.nbt",
@@ -327,7 +405,7 @@
   "file": "leaning_tower_pisa.nbt",
   "title": "Leaning Tower of Pisa",
   "category": "Torri",
-  "description": "Torre di Pisa pendente in marmo con logge a colonne, cella campanaria e scala interna."
+  "description": "Torre di Pisa pendente: basamento ad arcate cieche, sei logge a colonne regolari attorno al nucleo a fasce, cornici aggettanti, cella campanaria e scala interna fino in cima."
  },
  {
   "file": "lighthouse.nbt",

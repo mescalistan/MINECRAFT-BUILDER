@@ -152,6 +152,54 @@ def parse_nbt_bytes(data):
     return val, str(name)
 
 
+def parse_structure_bytes(data):
+    """
+    Parses a structure-block .nbt document without building a tag object for every block:
+    returns (root_tag_without_blocks, [(x, y, z, state_index), ...]). Much lighter on memory
+    for very large structures (millions of blocks). Block entities ('nbt') are skipped.
+    """
+    data = bytes(data)
+    if not data or data[0] != 10:
+        root, _ = parse_nbt_bytes(data)
+        return root, None
+    _, pos = _read_string(data, 1)
+    root = TAG_Compound()
+    blocks = None
+    unpack_i = _I.unpack_from
+    while True:
+        t_type = data[pos]
+        if t_type == 0:
+            break
+        name, pos = _read_string(data, pos + 1)
+        if name == "blocks" and t_type == 9 and data[pos] == 10:
+            length = unpack_i(data, pos + 1)[0]
+            pos += 5
+            blocks = []
+            append = blocks.append
+            for _ in range(max(0, length)):
+                x = y = z = state = 0
+                while True:
+                    tt = data[pos]
+                    if tt == 0:
+                        pos += 1
+                        break
+                    nlen = (data[pos + 1] << 8) | data[pos + 2]
+                    key = data[pos + 3:pos + 3 + nlen]
+                    pos += 3 + nlen
+                    if tt == 9 and key == b"pos" and data[pos] == 3 and unpack_i(data, pos + 1)[0] == 3:
+                        x, y, z = struct.unpack_from(">iii", data, pos + 5)
+                        pos += 17
+                    elif tt == 3 and key == b"state":
+                        state = unpack_i(data, pos)[0]
+                        pos += 4
+                    else:
+                        _, pos = _read_payload(data, pos, tt)
+                append((x, y, z, state))
+        else:
+            root[name], pos = _read_payload(data, pos, t_type)
+    return root, blocks
+
+
 def read_tag(f, tag_type):
     """Compatibility helper: reads a tag payload from a file-like object."""
     data = f.read()

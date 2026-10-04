@@ -97,48 +97,29 @@ class Structure:
 
     @classmethod
     def _load_nbt(cls, file_path):
-        """Loads native Minecraft Structure NBT format."""
-        tag, _ = load_nbt(file_path)
+        """Loads native Minecraft Structure NBT format (fast path, fine for millions of blocks)."""
+        from nbt_codec import parse_structure_bytes, _maybe_decompress
+        with open(file_path, "rb") as f:
+            tag, block_list = parse_structure_bytes(_maybe_decompress(f.read()))
         if not tag:
             raise ValueError("Empty or invalid NBT file")
-            
-        # Parse size [X, Y, Z]
         size_list = tag.get("size", [])
         if len(size_list) < 3:
             raise ValueError("Structure NBT is missing 'size' tag")
-            
         w, h, l = int(size_list[0]), int(size_list[1]), int(size_list[2])
-        
-        # Parse palette
-        palette = tag.get("palette", [])
-        
-        # Parse blocks
-        blocks_list = tag.get("blocks", [])
+
+        # One shared dict per palette entry: identical blocks share the same object
+        states = []
+        for state in tag.get("palette", []):
+            props = state.get("Properties", {})
+            states.append({"Name": str(state.get("Name", "minecraft:air")),
+                           "Properties": {k: str(v) for k, v in props.items()}})
         blocks = {}
-        
-        for b in blocks_list:
-            pos = b.get("pos", [])
-            state_idx = int(b.get("state", 0))
-            if len(pos) < 3:
-                continue
-                
-            bx, by, bz = int(pos[0]), int(pos[1]), int(pos[2])
-            
-            if state_idx < len(palette):
-                state = palette[state_idx]
-                name = state.get("Name", "minecraft:air")
-                props = state.get("Properties", {})
-                
-                # Copy properties safely
-                properties = {}
-                for k, v in props.items():
-                    properties[k] = str(v)
-                    
-                blocks[(bx, by, bz)] = {
-                    "Name": name,
-                    "Properties": properties
-                }
-                
+        n = len(states)
+        for x, y, z, idx in block_list or ():
+            if 0 <= idx < n:
+                blocks[(x, y, z)] = states[idx]
+
         dv = tag.get("DataVersion")
         struct = cls(w, h, l, blocks, int(dv) if dv is not None else None)
         meta = tag.get("MinecraftBuilder") or {}

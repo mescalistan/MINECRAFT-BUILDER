@@ -40,9 +40,11 @@ SIZES = {"piccolo": (6, 24), "medio": (10, 36), "grande": (16, 52)}  # (edifici,
 ORDER = ["north", "east", "south", "west"]
 DIR = {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}
 
-MAX_SLOPE = 4          # dislivello massimo nell'impronta di un edificio
+MAX_SLOPE = 6          # dislivello massimo nell'impronta di un edificio
 MAX_WATER = 0.08       # frazione massima di acqua sotto un edificio
+MAX_FILL = 8           # massimo riempimento sotto un edificio (fondamenta)
 ROAD_HALF = 1          # strade larghe 3
+SLOT_SEARCH = 14       # posizioni provate lungo la strada per ogni edificio
 
 
 def front_side(struct):
@@ -74,6 +76,7 @@ class _Plan:
         self.placements = []
         self.paths = set()
         self.lamps = []
+        self.destroyed = 0
 
     def free(self, x1, z1, x2, z2, margin=1):
         return all((x, z) not in self.reserved
@@ -85,22 +88,40 @@ class _Plan:
                 self.reserved.add((x, z))
 
 
-def _site_height(terrain, x1, z1, x2, z2):
-    """Median ground Y of a footprint, or None if unsuitable (ungenerated, water, too steep)."""
-    heights, water, total = [], 0, 0
-    for x in range(x1, x2 + 1, 2 if x2 - x1 > 12 else 1):
-        for z in range(z1, z2 + 1, 2 if z2 - z1 > 12 else 1):
+def site_cost(terrain, x1, z1, x2, z2):
+    """
+    Evaluates a footprint. Returns (cost, y_coord, destroyed_estimate) or None if unsuitable.
+
+    The floor goes at the 75th percentile of the ground: most of the footprint is filled
+    (foundations) instead of dug, so few natural blocks are destroyed. Trees under the
+    footprint are expensive (they would be cut); water and ungenerated chunks exclude the site.
+    """
+    heights, water, trees, total = [], 0, 0, 0
+    step = 2 if max(x2 - x1, z2 - z1) > 12 else 1
+    has_trees = hasattr(terrain, "is_tree")
+    for x in range(x1, x2 + 1, step):
+        for z in range(z1, z2 + 1, step):
             total += 1
             h = terrain.height(x, z)
             if h is None:
                 return None
             if terrain.is_water(x, z):
                 water += 1
+            if has_trees and terrain.is_tree(x, z):
+                trees += 1
             heights.append(h)
     if water > MAX_WATER * total or max(heights) - min(heights) > MAX_SLOPE:
         return None
     heights.sort()
-    return heights[len(heights) // 2]
+    ground = heights[min(len(heights) - 1, (len(heights) * 3) // 4)]
+    if ground - heights[0] > MAX_FILL:
+        return None
+    area = step * step
+    cut = sum(h - ground for h in heights if h > ground) * area
+    fill = sum(ground - h for h in heights if h < ground) * area
+    tree_cols = trees * area
+    cost = cut * 3 + tree_cols * 10 + fill * 0.4
+    return cost, ground + 1, cut + tree_cols * 6
 
 
 def _rect_for(arm, side, t, w, l, cx, cz):
@@ -127,8 +148,9 @@ def generate_village(center, style, size, terrain, load, seed=None):
 
     # Piazza centrale
     hub = load(spec["center"])
-    hy = _site_height(terrain, cx - hub.width // 2, cz - hub.length // 2,
-                      cx - hub.width // 2 + hub.width - 1, cz - hub.length // 2 + hub.length - 1)
+    hub_eval = site_cost(terrain, cx - hub.width // 2, cz - hub.length // 2,
+                         cx - hub.width // 2 + hub.width - 1, cz - hub.length // 2 + hub.length - 1)
+    hy = None if hub_eval is None else hub_eval[1] - 1
     if hy is None:
         return {"placements": [], "path_cells": [], "report": "Il centro scelto non e' adatto (acqua, pendenza o "
                                                             "terreno non generato): prova un punto piu' pianeggiante."}
@@ -171,27 +193,30 @@ def generate_village(center, style, size, terrain, load, seed=None):
         rng.shuffle(slots)
         for arm, side in sorted(slots, key=lambda s: cursors[s]):
             base = cache.get(name) or cache.setdefault(name, load(name))
-            t = cursors[(arm, side)]
-            while t < road_len - 2:
-                _, target = _rect_for(arm, side, t, 1, 1, cx, cz)
-                struct = rotate_to_face(base, target)
+            t0 = cursors[(arm, side)]
+            _, target = _rect_for(arm, side, t0, 1, 1, cx, cz)
+            struct = rotate_to_face(base, target)
+            best = None
+            # try several positions along the road and keep the one that fits the land best
+            for t in range(t0, min(t0 + SLOT_SEARCH, road_len - 2)):
                 rect, _ = _rect_for(arm, side, t, struct.width, struct.length, cx, cz)
-                x1, z1, x2, z2 = rect
-                if plan.free(x1, z1, x2, z2):
-                    h = _site_height(terrain, x1, z1, x2, z2)
-                    if h is not None:
-                        plan.placements.append({"structure": struct, "world_x": x1, "world_z": z1, "y_coord": h + 1,
-                                                "name": name + ".nbt", "group": "villaggio"})
-                        plan.reserve(x1, z1, x2, z2)
-                        _door_path(plan, struct, x1, z1, target, road)
-                        cursors[(arm, side)] = t + (struct.width if arm in ("east", "west") else struct.length) + 2
-                        placed += 1
-                        done = True
-                        break
-                t += 2
-            if done:
+                if not plan.free(*rect):
+                    continue
+                evaluation = site_cost(terrain, *rect)
+                if evaluation and (best is None or evaluation[0] + (t - t0) * 2 < best[0]):
+                    best = (evaluation[0] + (t - t0) * 2, t, rect, evaluation)
+            if best:
+                _, t, (x1, z1, x2, z2), (_cost, y, destroyed) = best
+                plan.placements.append({"structure": struct, "world_x": x1, "world_z": z1, "y_coord": y,
+                                        "name": name + ".nbt", "group": "villaggio"})
+                plan.reserve(x1, z1, x2, z2)
+                plan.destroyed += destroyed
+                _door_path(plan, struct, x1, z1, target, road)
+                cursors[(arm, side)] = t + (struct.width if arm in ("east", "west") else struct.length) + 2
+                placed += 1
+                done = True
                 break
-            cursors[(arm, side)] = max(cursors[(arm, side)], t)
+            cursors[(arm, side)] = min(t0 + SLOT_SEARCH, road_len)
         if not done:
             skipped += 1
 
@@ -205,10 +230,12 @@ def generate_village(center, style, size, terrain, load, seed=None):
                 plan.lamps.append((x, z, terrain.height(x, z) + 1))
                 plan.reserved.add((x, z))
 
-    report = f"{spec['title']}: {placed} edifici, {len(plan.paths)} blocchi di strada, {len(plan.lamps)} lampioni"
+    report = (f"{spec['title']}: {placed} edifici, {len(plan.paths)} blocchi di strada, {len(plan.lamps)} lampioni, "
+              f"circa {plan.destroyed} blocchi naturali da rimuovere")
     if skipped:
         report += f" ({skipped} edifici non piazzati per mancanza di spazio adatto)"
     return {"placements": plan.placements, "path_cells": sorted(plan.paths), "lamps": plan.lamps,
+            "placed": placed, "destroyed": plan.destroyed,
             "path_block": spec["path"], "lamp_wood": spec["lamp"], "report": report}
 
 
@@ -227,3 +254,50 @@ def _door_path(plan, struct, x1, z1, facing, road):
         if not (x1 <= x < x1 + struct.width and z1 <= z < z1 + struct.length):
             plan.paths.add((x, z))
             plan.reserved.add((x, z))
+
+
+def find_best_site(terrain, around, style, size, load, radius=160, step=16, log=None):
+    """
+    Looks for the best village centre within 'radius' blocks of 'around': flat, dry, few
+    trees, fully generated, not too far. Returns (center, result) or (None, reason).
+    """
+    log = log or (lambda m: None)
+    half = SIZES[size][1]
+    ax, az = around
+    has_trees = hasattr(terrain, "is_tree")
+    quick = []
+    for gx in range(ax - radius, ax + radius + 1, step):
+        for gz in range(az - radius, az + radius + 1, step):
+            hs, water, trees, missing, n = [], 0, 0, 0, 0
+            for x in range((gx - half) // 4 * 4, gx + half + 1, 4):
+                for z in range((gz - half) // 4 * 4, gz + half + 1, 4):
+                    n += 1
+                    h = terrain.height(x, z)
+                    if h is None:
+                        missing += 1
+                        continue
+                    hs.append(h)
+                    water += terrain.is_water(x, z)
+                    trees += bool(has_trees and terrain.is_tree(x, z))
+            if missing > 0.03 * n or len(hs) < 10:
+                continue
+            mean = sum(hs) / len(hs)
+            rough = (sum((h - mean) ** 2 for h in hs) / len(hs)) ** 0.5
+            distance = ((gx - ax) ** 2 + (gz - az) ** 2) ** 0.5
+            score = rough * 10 + water / n * 300 + trees / n * 120 + distance * 0.05
+            quick.append((score, (gx, gz)))
+    if not quick:
+        return None, "Nessuna zona adatta e completamente generata nei dintorni: esplora di piu' in gioco."
+    quick.sort()
+    best = None
+    for _, center in quick[:5]:
+        result = generate_village(center, style, size, terrain, load, seed=1)
+        if not result["placements"]:
+            continue
+        value = result["placed"] * 100 - result["destroyed"] * 0.5
+        log(f"  candidato {center}: {result['placed']} edifici, circa {result['destroyed']} blocchi da rimuovere")
+        if best is None or value > best[0]:
+            best = (value, center, result)
+    if best is None:
+        return None, "Le zone pianeggianti trovate non bastano per un villaggio di questa dimensione."
+    return best[1], best[2]

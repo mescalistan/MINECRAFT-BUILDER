@@ -63,68 +63,6 @@ def eiffel_tower():
     return b
 
 
-@template("leaning_tower_pisa", "Leaning Tower of Pisa", "Landmark",
-          "Torre di Pisa pendente in marmo con logge a colonne, cella campanaria e scala interna.")
-def leaning_tower_pisa():
-    b = Builder(15, 40, 15)
-    c0, cz = 5, 7
-
-    def cx(y):
-        return c0 + int(y * 0.1)
-
-    b.disk(cx(0), cz, 0, 5.5, "smooth_quartz")
-    for y in range(1, 8):
-        b.ring(cx(y), cz, y, 4.5, "smooth_quartz", thickness=1.2)
-        b.disk(cx(y), cz, y, 3.2, AIR)
-    for i, a in enumerate(range(0, 360, 30)):
-        if a == 90:
-            continue  # lato della porta
-        x = cx(4) + int(round(4.6 * math.cos(math.radians(a))))
-        z = cz + int(round(4.6 * math.sin(math.radians(a))))
-        b.fill(x, 2, z, x, 6, z, "quartz_pillar", axis="y")
-    for s in range(6):
-        y0 = 8 + s * 4
-        x0 = cx(y0)
-        b.disk(x0, cz, y0, 5, "smooth_quartz")
-        b.disk(x0, cz, y0, 3.2, "smooth_quartz")
-        for y in range(y0 + 1, y0 + 4):
-            xc = cx(y)
-            b.ring(xc, cz, y, 3.6, "smooth_quartz", thickness=1)
-            b.disk(xc, cz, y, 2.6, AIR)
-            if y < y0 + 3:
-                for a in range(30, 360, 30):
-                    x = xc + int(round(4.6 * math.cos(math.radians(a))))
-                    z = cz + int(round(4.6 * math.sin(math.radians(a))))
-                    b.set(x, y, z, "quartz_pillar", axis="y")
-        b.ring(cx(y0 + 3), cz, y0 + 3, 5, "smooth_quartz_slab", thickness=1.4, type="bottom", waterlogged="false")
-        b.lantern(cx(y0 + 1) + 1, y0 + 1, cz - 1)
-    # Cella campanaria
-    yb = 32
-    xb = cx(yb)
-    b.disk(xb, cz, yb, 3.6, "smooth_quartz")
-    for y in range(yb + 1, yb + 4):
-        b.ring(xb, cz, y, 3.2, "quartz_pillar", axis="y")
-        b.disk(xb, cz, y, 2.2, AIR)
-    for a in range(0, 360, 45):
-        x = xb + int(round(3 * math.cos(math.radians(a + 22))))
-        z = cz + int(round(3 * math.sin(math.radians(a + 22))))
-        b.set(x, yb + 1, z, AIR)
-        b.set(x, yb + 2, z, AIR)
-    b.disk(xb, cz, yb + 4, 3.4, "smooth_quartz_slab", type="bottom", waterlogged="false")
-    b.set(xb + 1, yb + 1, cz + 1, "bell", attachment="floor", facing="north", powered="false")
-    b.lantern(xb - 1, yb + 1, cz + 1)
-    # Colonna interna verticale con scala a pioli fino alla cella campanaria
-    col = c0 + 1
-    b.fill(col, 1, cz - 1, col, yb, cz - 1, "smooth_quartz")
-    b.ladder(col, 1, yb, cz, "south")
-    b.set(col, yb + 1, cz, AIR)
-    # Ingresso
-    door_x = cx(1)
-    b.entrance(door_x, 1, cz + 4, "north", wood="dark_oak", step="smooth_quartz")
-    b.lantern(c0 - 1, 1, cz - 1)
-    return b
-
-
 @template("big_ben", "Big Ben (Elizabeth Tower)", "Landmark",
           "Torre dell'orologio di Londra con quadranti, cella campanaria, guglia e scala interna.")
 def big_ben():
@@ -192,70 +130,6 @@ def big_ben():
     # Scala interna e ingresso
     b.ladder(5, 1, 42, 2, "south")
     b.entrance(5, 1, 9, "north", wood="dark_oak", step="sandstone")
-    return b
-
-
-@template("colosseum", "Colosseum", "Landmark",
-          "Colosseo di Roma: anello ellittico a quattro ordini di arcate, gradinate, arena e un lato in rovina.")
-def colosseum():
-    rx, rz = 20, 16
-    b = Builder(41, 17, 33, seed=11)
-    cx, cz = 20, 16
-    for x in range(41):
-        for z in range(33):
-            e = math.sqrt(((x - cx) / rx) ** 2 + ((z - cz) / rz) ** 2)
-            ang = math.atan2(z - cz, x - cx)
-            ruined = -0.3 < ang < 1.1
-            if e > 1.0:
-                continue
-            if e < 0.6:
-                b.set(x, 0, z, "sand")
-                continue
-            b.set(x, 0, z, "smooth_sandstone")
-            if e >= 0.92:
-                top = 16
-                if ruined:
-                    top = 6 + int(abs(math.sin(ang * 7)) * 6)
-                for y in range(1, top + 1):
-                    tier = (y - 1) // 4
-                    k = int((ang + math.pi) / (2 * math.pi) * 64)
-                    opening = tier < 3 and k % 2 == 0
-                    if (y - 1) % 4 == 3:
-                        b.set(x, y, z, "cut_sandstone")
-                    elif opening and (y - 1) % 4 in (1, 2):
-                        b.set(x, y, z, AIR)
-                    else:
-                        b.set(x, y, z, "smooth_sandstone" if k % 2 else "sandstone")
-            elif e >= 0.86:
-                for y in range(1, 4):
-                    b.set(x, y, z, AIR)
-            else:
-                h = 2 + int((e - 0.6) / 0.26 * 10)
-                if ruined:
-                    h = min(h, 4 + int(abs(math.sin(ang * 5)) * 4))
-                for y in range(1, h):
-                    b.set(x, y, z, "sandstone")
-                b.slab(x, h, z, "smooth_sandstone")
-                if e < 0.64:
-                    b.fill(x, 1, z, x, 2, z, "smooth_sandstone")
-    # Ingressi assiali verso l'arena
-    for x0, z0, x1, z1 in ((cx - 1, 0, cx + 1, 6), (cx - 1, 26, cx + 1, 32), (0, cz - 1, 8, cz + 1), (32, cz - 1, 40, cz + 1)):
-        for x in range(x0, x1 + 1):
-            for z in range(z0, z1 + 1):
-                e = math.sqrt(((x - cx) / rx) ** 2 + ((z - cz) / rz) ** 2)
-                if 0.58 < e <= 1.0:
-                    b.set(x, 0, z, "smooth_sandstone")
-                    b.clear(x, 1, z, x, 3, z)
-                    if b.get(x, 4, z) not in (None, AIR):
-                        b.lantern(x, 3, z, hanging=True)
-    for x, z in ((cx, cz), (cx - 6, cz), (cx + 6, cz)):
-        b.lantern(x, 1, z)
-    # Lanterne nel corridoio coperto dietro le arcate
-    for a in range(0, 360, 20):
-        x = cx + int(round(rx * 0.89 * math.cos(math.radians(a))))
-        z = cz + int(round(rz * 0.89 * math.sin(math.radians(a))))
-        if b.get(x, 1, z) == AIR:
-            b.lantern(x, 1, z)
     return b
 
 
@@ -518,28 +392,6 @@ def tower_bridge():
     return b
 
 
-@template("moai_heads", "Moai of Easter Island", "Landmark",
-          "Tre statue Moai dell'Isola di Pasqua su un ahu di pietra, una con il pukao rosso.")
-def moai_heads():
-    b = Builder(19, 13, 8, seed=9)
-    b.fill_random(0, 0, 1, 18, 1, 6, [("stone_bricks", 4), ("mossy_stone_bricks", 1), ("cobblestone", 2)])
-    for i, a in enumerate((2, 8, 14)):
-        b.fill(a, 2, 2, a + 2, 10, 4, "tuff")
-        b.fill(a, 9, 2, a + 2, 10, 4, "polished_tuff")
-        for x in range(a, a + 3):
-            b.stair(x, 8, 5, "polished_tuff", "north", top=True)
-        b.set(a + 1, 6, 5, "polished_tuff")
-        b.set(a + 1, 5, 5, "tuff_stairs", facing="north", half="top", shape="straight", waterlogged="false")
-        b.slab(a + 1, 3, 5, "tuff", top=True)
-        b.set(a - 1 if a > 0 else a, 6, 3, "tuff_wall")
-        b.set(a + 3, 6, 3, "tuff_wall")
-        if i == 1:
-            b.cylinder(a + 1, 3, 11, 12, 1.4, "red_terracotta")
-    for x in (0, 18):
-        b.lantern(x, 2, 6)
-    return b
-
-
 @template("el_castillo", "El Castillo (Chichen Itza)", "Landmark",
           "Piramide maya di Kukulkan: nove terrazze, scalinate sui quattro lati e tempio sulla cima.")
 def el_castillo():
@@ -583,40 +435,6 @@ def el_castillo():
     return b
 
 
-@template("arc_de_triomphe", "Arc de Triomphe", "Landmark",
-          "Arco di Trionfo di Parigi con fornice principale, archi laterali, rilievi e terrazza panoramica.")
-def arc_de_triomphe():
-    W, L = 17, 11
-    b = Builder(W, 19, L)
-    b.fill(0, 0, 0, W - 1, 15, L - 1, "smooth_sandstone")
-    b.carve_arch("x", 5, 11, 0, L - 1, 0, 12)
-    b.carve_arch("z", 3, 7, 0, W - 1, 0, 7)
-    b.fill(5, 0, 0, 11, 0, L - 1, "smooth_stone")
-    b.fill(0, 0, 3, W - 1, 0, 7, "smooth_stone")
-    for x, z in ((1, 0), (13, 0), (1, L - 1), (13, L - 1)):
-        b.fill(x, 4, z, x + 2, 8, z, "chiseled_sandstone")
-    for x in range(W):
-        b.stair(x, 13, 0, "smooth_sandstone", "south", top=True)
-        b.stair(x, 13, L - 1, "smooth_sandstone", "north", top=True)
-    b.fill(0, 14, 0, W - 1, 15, L - 1, "cut_sandstone")
-    b.walls(0, 16, 0, W - 1, 16, L - 1, "sandstone_wall")
-    b.clear(1, 16, 1, W - 2, 17, L - 2)
-    # Scala interna al pilone ovest fino alla terrazza
-    b.clear(1, 1, 8, 3, 14, 9)
-    b.entrance(2, 1, 8, "south", wood="dark_oak", step=None)
-    b.ladder(1, 1, 15, 9, "east")
-    b.set(1, 16, 9, AIR)
-    b.lantern(3, 1, 9)
-    # Fiamma del milite ignoto e luci sotto l'arco
-    b.set(8, 1, 5, "chiseled_quartz_block")
-    b.lantern(8, 2, 5)
-    b.lantern(6, 10, 5, hanging=True)
-    b.lantern(10, 10, 5, hanging=True)
-    for x, z in ((3, 2), (13, 2), (3, 8), (13, 8)):
-        b.lantern(x, 16, z)
-    return b
-
-
 @template("five_storey_pagoda", "Five-Storey Pagoda", "Landmark",
           "Pagoda giapponese a cinque piani con gronde ricurve, pilastro centrale e guglia sorin.")
 def five_storey_pagoda():
@@ -628,7 +446,7 @@ def five_storey_pagoda():
     for level in range(5):
         r = 4 - (level + 1) // 2
         x1, x2 = c - r, c + r
-        b.room(x1, y - 1 if level else 0, x1, x2, y + 3, x2, "white_terracotta", floor="spruce_planks", ceiling="spruce_planks")
+        b.room(x1, y - 1 if level else 0, x1, x2, y + 3, x2, "mushroom_stem", floor="spruce_planks", ceiling="spruce_planks")
         for x, z in ((x1, x1), (x2, x1), (x1, x2), (x2, x2)):
             b.fill(x, y, z, x, y + 2, z, "stripped_mangrove_log", axis="y")
         for i in range(x1 + 1, x2):

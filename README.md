@@ -7,26 +7,40 @@
 ## ✨ Funzionalità Principali
 
 - 🗺️ **Visualizzatore Mappa Anvil (.mca)**:
-  - Rendering topografico ad alta velocità con hillshading e colori distinti per altimetria e biomi.
-  - Zoom incentrato sul cursore del mouse e navigazione Pan fluida.
-  - HUD fluttuante in stile glassmorphism con coordinate globali, coordinate del chunk, altezza Y e bioma stimato.
+  - **Mappa estesa a tutto il mondo**: tutte le regioni vengono caricate in background (prima quelle vicine alla vista) e si può scorrere liberamente da una regione all'altra; *Tutto il mondo* rimpicciolisce fino a mostrarle tutte (zoom dal 4% al 3200%).
+  - **Mappa dettagliata**: ogni pixel ha il colore del blocco in superficie (erba, sabbia, legno, tetti, strade, chiome degli alberi) con ombreggiatura del rilievo e acqua più scura dove è profonda: case, villaggi e costruzioni si riconoscono a colpo d'occhio.
+  - **Memoria delle zone già viste**: le regioni disegnate restano in memoria e vengono salvate in una cache su disco (`%LOCALAPPDATA%\MinecraftBuilder\map_cache`), così riaprendo il programma compaiono subito; una regione viene ridisegnata solo se il suo file è cambiato (ad esempio dopo un'iniezione).
+  - **Strutture sulla mappa**: le strutture iniettate con il programma vengono registrate in `minecraft_builder.json` e disegnate con riquadro e nome, colorate per categoria (da lontano restano visibili come punti); villaggi, templi, portali e altre strutture generate dal gioco sono riquadrate in azzurro. Passando il mouse si vedono nome, coordinate e dimensioni; il menu *Vai a una struttura...* centra la mappa su ognuna.
+  - Zoom incentrato sul cursore (rotellina o +/-), pan con trascinamento o frecce/WASD, griglia dei chunk e scala in blocchi.
+  - HUD con coordinate globali, regione, chunk, altezza Y e strutture sotto il cursore.
 - 📂 **Apertura automatica del mondo**:
   - Basta indicare un qualsiasi percorso legato al mondo: la cartella del mondo, una sua sottocartella (`region`, `DIM-1`, `playerdata`...), `level.dat`, un file `.mca`, la cartella `saves` o `.minecraft`. L'app ricava da sola cartella dei salvataggi, mondo e dimensione.
   - Il percorso si può scegliere con *Sfoglia...*, incollare nel campo (Invio) o trascinare sulla finestra; da riga di comando: `py -3 main.py "percorso"`.
   - Selettore Overworld / Nether / End, elenco dei soli mondi validi (dal più recente) e ripresa automatica dell'ultimo mondo aperto.
 - 🗂️ **Libreria per categorie**: Case, Castelli e fortezze, Torri, Ponti, Monumenti, Templi e luoghi sacri, Fattorie e animali, Piazze e decorazioni, Utilità e magia, Navi, Rovine e portali, Fantascienza e Ritagli, con ricerca per nome/descrizione.
 - 🌉 **Ponti su misura** (scheda *Ponti*): quattro stili (pietra ad archi, legno, mattoni del Nether, sospeso) di qualsiasi lunghezza.
-  - *Disegna ponte tra due sponde*: due clic sulla mappa e il ponte viene calcolato con lunghezza, direzione e altezza giuste (sempre sopra il livello dell'acqua); i piloni scendono fino al fondo nello stesso materiale.
-  - Se il nuovo ponte parte vicino alla fine di un ponte esistente (in coda o costruito in precedenza, memorizzato nel mondo) lo prosegue senza interruzioni, nello stesso stile e alla stessa altezza.
+  - *Disegna ponte tra due sponde*: due clic sulla mappa. Il ponte è dritto e parte dal primo clic (l'anteprima mostra l'ingombro mentre muovi il mouse); il profilo del terreno viene letto blocco per blocco e lunghezza, altezza, piloni e rampe vengono calcolati da soli.
+  - Le estremità arrivano sempre a terra: se le sponde sono ad altezze diverse il ponte scende con una rampa di scale fino alla sponda più bassa, senza capi sospesi nel vuoto.
+  - **Integra con l'ambiente** (opzione): l'impalcato sale dolcemente da una sponda all'altra (un blocco ogni due), resta abbastanza alto sull'acqua da far passare le barche sotto gli archi, scavalca le colline invece di scavarle e usa i materiali del posto (arenaria nel deserto, arenaria rossa nelle badlands, mattoni di fango nelle paludi, pietra muschiosa nella giungla, il legno degli alberi vicini).
+  - I piloni scendono fino al fondo del fiume; sulla terraferma il ponte diventa un terrapieno pieno fino al terreno, mentre sotto gli archi resta lo spazio vuoto.
+  - Se il nuovo ponte parte vicino alla fine di un ponte esistente (in coda o costruito in precedenza, memorizzato nel mondo) lo prosegue senza interruzioni, nello stesso stile e alla stessa altezza dell'estremità.
   - I ponti della libreria si possono allungare o accorciare mantenendo lo stile.
+- 🏰 **Mura difensive** (scheda *Mura*): cinque stili (pietra medievale, arenaria del deserto, ardesia nordica, pietra nera, palizzata di legno), altezza regolabile.
+  - *Suggerisci il perimetro*: le mura vengono proposte intorno alle costruzioni vicine al giocatore (e alle strutture piazzate col programma), con un margine di 10 blocchi.
+  - *Disegna il perimetro*: clic sui vertici sulla mappa (linee allineate a 0/45/90 gradi, Shift per linee libere), clic sul primo punto o Invio per chiudere, doppio clic per un tratto aperto, Backspace per togliere l'ultimo punto.
+  - Il camminamento segue il terreno salendo o scendendo al massimo di un blocco alla volta (con scale), merli all'esterno, parapetto e lanterne all'interno, torri agli angoli e a intervalli regolari con porta verso l'interno e scala a pioli fino al tetto.
+  - Porte: la posizione viene consigliata dove passa una strada o dove il terreno è libero, piano e asciutto (senza demolire costruzioni); se ne possono aggiungere altre con un clic. Tipi: arco aperto, portone con cancelli, **ponte levatoio**. Sulle mura oblique il tratto intorno alla porta viene raddrizzato, così il corpo di guardia si unisce alle mura senza sporgere.
+  - **Due leve per ogni porta**: una dentro (sul selciato del cortile, a sinistra della strada) e una nascosta fuori (in un cespuglio a destra della strada d'arrivo). Ogni scatto di una qualsiasi delle due apre o chiude la porta, quindi si può aprire da fuori, entrare e richiudere da dentro. Ogni leva poggia su un osservatore che manda un impulso a una lampadina di rame cerata (la memoria), letta da un comparatore. Nel portone il segnale spegne le torce sotto i cancelli e li chiude; nel ponte levatoio tiene alzato il ponte.
+  - Ponte levatoio automatico: davanti alla porta c'è un fossato. Due sensori sculk nascosti sotto le strade, fuori dalla portata d'ascolto dei pistoni (così non si riattivano da soli), sentono chi si avvicina e 6 pistoni appiccicosi fanno emergere il ponte dall'acqua; un ramo ritardato con ripetitori lo tiene su durante il tempo di ricarica dei sensori e per circa due secondi dopo l'ultimo movimento, il tempo di attraversare. Il circuito è verificato da un simulatore di redstone nei test.
+  - Luci automatiche: nel passaggio le lampade si accendono al movimento (sensori sculk) e sulle torri, sulla porta e lungo le mura si accendono da sole di notte (rilevatori di luce diurna invertiti).
 - 🏘️ **Generatore di villaggi** (scheda *Villaggio*): pianura, borgo medievale o nordico, in tre dimensioni. Crea piazza, strade a croce che seguono il terreno, edifici con la porta rivolta verso la strada, fattorie, sentieri e lampioni, evitando acqua, pendii e zone non generate.
-- ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura. In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno.
+- ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura, **senza limiti di dimensione** (il ritaglio gira in background con l'avanzamento nel log: un'area di 400×400 con il terreno, 3 milioni di blocchi, si estrae in circa 10 secondi). In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno.
 - 📍 **Rilevamento e Tracciamento Giocatore**:
   - Localizzazione automatica delle ultime coordinate del giocatore dai file di salvataggio (`level.dat`, `playerdata`, `players`).
   - Animazione radar circolare pulsante sul marker del giocatore.
   - Pulsante per centrare istantaneamente la visuale sulla regione del personaggio.
 - 🏗️ **Gestione e Posizionamento Strutture**:
-  - Libreria integrata di 65 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
+  - Libreria integrata di 78 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
   - Browser per cercare e scaricare schemi online.
   - Anteprima grafica top-down 2D dei blocchi reali con trasparenza per allineamento preciso.
   - Rotazione a 90° oraria (`R`) e drag-and-drop con click-to-place.
@@ -43,6 +57,8 @@
   - Modifica per sezioni (ogni sezione 16×16×16 viene decodificata e ricodificata una sola volta): migliaia di volte più veloce dell'approccio blocco per blocco.
   - Regioni caricate in modo lazy: la mappa legge solo le heightmap e il salvataggio riscrive solo i chunk modificati, copiando gli altri byte per byte.
   - Scrittura atomica e backup automatico di ogni file `.mca` modificato.
+  - I blocchi che hanno bisogno di un'entità (rilevatori di luce, sensori sculk, casse, letti, cartelli...) ricevono un'entità vuota, così funzionano subito; i collegamenti della polvere di redstone vengono calcolati come fa il gioco.
+  - La mappa dettagliata viene disegnata in parallelo su più processi: la prima volta un mondo di 28 regioni richiede circa 18 secondi invece di un minuto, poi viene ripreso dalla cache.
   - Luce e heightmap dei chunk modificati invalidate: Minecraft le ricalcola al caricamento.
   - I chunk non generati vengono saltati (mai creati vuoti) e i blocchi di mod vengono saltati nei mondi vanilla.
   - Compatibile con i mondi dalla 1.18 a Minecraft 26.x: legge e scrive sia il formato classico dei blocchi (`{Name, Properties}`) sia quello nuovo (stringhe e `{id, properties}`), e aggiorna i nomi dei blocchi rinominati (es. `chain` → `iron_chain`, `grass` → `short_grass`) in base alla versione del mondo.
@@ -91,12 +107,14 @@
 ```
 .
 ├── main.py                 # Finestra principale, controller GUI, worker thread asincrono
-├── map_viewer.py           # Canvas interattivo della mappa, rendering e HUD
+├── map_viewer.py           # Canvas interattivo della mappa multi-regione, overlay strutture e HUD
+├── map_tiles.py            # Tessere della mappa (colori dei blocchi, strutture del gioco) e cache su disco
 ├── mca_codec.py            # Parser e scrittore Anvil (.mca) lazy, ChunkEditor per sezioni, heightmap
 ├── world_editor.py         # Accesso al mondo in coordinate globali (multi-regione), iniezione, sentieri
 ├── world_locator.py        # Riconosce mondo/saves/dimensione da qualsiasi percorso
 ├── catalog.py              # Catalogo delle strutture con categorie in italiano
-├── structure_generators.py # Ponti parametrici, ponte tra due sponde con aggancio, lampioni
+├── structure_generators.py # Ponti parametrici, ponte tra due sponde con profilo del terreno e materiali del posto
+├── walls.py                # Mura, torri, porte, ponte levatoio a pistoni con sensori sculk, luci automatiche
 ├── village_generator.py    # Generatore di villaggi
 ├── world_extractor.py      # Ritaglio di zone di mondo come strutture
 ├── nbt_codec.py            # Codec puro Python per la lettura/scrittura di file NBT
@@ -115,7 +133,7 @@
 └── requirements.txt        # Dipendenze Python
 ```
 
-### 🧱 Libreria di template vanilla (65 modelli)
+### 🧱 Libreria di template vanilla (78 modelli)
 
 Tutti generati da codice con `python tools/build_templates.py` (solo blocchi vanilla, DataVersion 3955 / MC 1.21.1), validati automaticamente per la giocabilità e testati con iniezione in un mondo. Il livello y=0 di ogni modello è il primo strato sopra il terreno.
 
@@ -240,6 +258,19 @@ Tutti generati da codice con `python tools/build_templates.py` (solo blocchi van
 | Market Stall | `market_stall.nbt` | 5×5×5 | Bancarella con tendone a righe, bancone, barili e lanterna. |
 | Village Well | `village_well.nbt` | 6×9×6 | Pozzo da villaggio con acqua, tettoia in pietra e lanterne. |
 | Zen Garden | `zen_garden.nbt` | 19×9×19 | Giardino zen giapponese con ghiaia, laghetto con ninfee, ponticello, ciliegi in fiore, bambu' e lanterne di pietra. |
+
+#### ✨ Strutture vetrina e rifatte
+
+Strutture più dettagliate aggiunte di recente (ispirate alle costruzioni più popolari della community):
+
+| Modello | File | Descrizione |
+|---|---|---|
+| Japanese Cherry Temple | `cherry_temple.nbt` | Tempio-castello giapponese a tre piani con pareti bianche, pilastri di ciliegio, tetti in mattoni del Nether e ciliegi in fiore. |
+| Golden Pavilion (Kinkaku-ji) | `kinkaku_ji.nbt` | Padiglione d'Oro sullo stagno, con isola, pini, sentiero e lanterne di pietra; il giardino si appoggia al terreno esistente. |
+| Neuschwanstein Castle | `neuschwanstein.nbt` | Castello fiabesco su uno sperone di roccia: palazzo bianco, torre altissima con belvedere, torrette a cono, corpo di guardia rosso. |
+| Himeji, Santorini, Victorian, Alpine Chalet, Cottage, Red Barn, Watermill, Stave Church, Chinese Pavilion, City Gate | vari | Dieci edifici vetrina con più materiali, profondità e arredi. |
+
+Rifatte da zero perché troppo semplici: Arco di Trionfo (archivolti, rilievi, attico, terrazza), Moai (volti scolpiti, braccia, pukao), Colosseo (arcate regolari, corridoi, gradinate, rovina sul retro), Igloo, Portale in rovina, Portale della città antica, Casa lunga vichinga, Tempio del deserto, Tempio della giungla, Torre di Pisa (logge a colonne regolari).
 
 ### 🧰 Strumenti per i template
 
