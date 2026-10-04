@@ -10,6 +10,10 @@
   - Rendering topografico ad alta velocità con hillshading e colori distinti per altimetria e biomi.
   - Zoom incentrato sul cursore del mouse e navigazione Pan fluida.
   - HUD fluttuante in stile glassmorphism con coordinate globali, coordinate del chunk, altezza Y e bioma stimato.
+- 📂 **Apertura automatica del mondo**:
+  - Basta indicare un qualsiasi percorso legato al mondo: la cartella del mondo, una sua sottocartella (`region`, `DIM-1`, `playerdata`...), `level.dat`, un file `.mca`, la cartella `saves` o `.minecraft`. L'app ricava da sola cartella dei salvataggi, mondo e dimensione.
+  - Il percorso si può scegliere con *Sfoglia...*, incollare nel campo (Invio) o trascinare sulla finestra; da riga di comando: `py -3 main.py "percorso"`.
+  - Selettore Overworld / Nether / End, elenco dei soli mondi validi (dal più recente) e ripresa automatica dell'ultimo mondo aperto.
 - 📍 **Rilevamento e Tracciamento Giocatore**:
   - Localizzazione automatica delle ultime coordinate del giocatore dai file di salvataggio (`level.dat`, `playerdata`, `players`).
   - Animazione radar circolare pulsante sul marker del giocatore.

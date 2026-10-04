@@ -113,6 +113,48 @@ class RegionTests(unittest.TestCase):
                 self.assertNotIn("SkyLight", sec)
 
 
+class WorldLocatorTests(unittest.TestCase):
+    def setUp(self):
+        import world_locator
+        self.loc = world_locator
+        self.tmp = tempfile.mkdtemp()
+        self.saves = os.path.join(self.tmp, ".minecraft", "saves")
+        self.world = os.path.join(self.saves, "Mio Mondo")
+        for sub in ("region", "playerdata", os.path.join("DIM-1", "region"), "datapacks"):
+            os.makedirs(os.path.join(self.world, sub))
+        with open(os.path.join(self.world, "level.dat"), "wb") as f:
+            f.write(b"x")
+        for rel in ("region/r.0.0.mca", "DIM-1/region/r.0.0.mca"):
+            open(os.path.join(self.world, rel), "wb").close()
+        os.makedirs(os.path.join(self.saves, "##Mio Mondo.UNDO##"))  # not a world: no level.dat
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_any_path_inside_a_world_finds_it(self):
+        for rel, dim in (("", None), ("region", None), ("playerdata", None), ("datapacks", None),
+                         ("level.dat", None), ("region/r.0.0.mca", None), ("DIM-1", "Nether"),
+                         ("DIM-1/region", "Nether")):
+            found = self.loc.resolve(os.path.join(self.world, rel))
+            self.assertEqual((found["saves_dir"], found["world"], found["dimension"]),
+                             (self.saves, "Mio Mondo", dim), rel)
+
+    def test_saves_and_minecraft_folders(self):
+        self.assertEqual(self.loc.resolve(self.saves), {"saves_dir": self.saves, "world": None, "dimension": None})
+        self.assertEqual(self.loc.resolve(os.path.dirname(self.saves))["saves_dir"], self.saves)
+        self.assertIsNone(self.loc.resolve(self.tmp))
+        self.assertIsNone(self.loc.resolve(os.path.join(self.tmp, "non esiste")))
+
+    def test_world_without_level_dat_is_found_by_its_regions(self):
+        os.remove(os.path.join(self.world, "level.dat"))
+        self.assertEqual(self.loc.resolve(os.path.join(self.world, "region"))["world"], "Mio Mondo")
+        self.assertEqual(self.loc.list_worlds(self.saves), ["Mio Mondo"])
+
+    def test_lists_only_real_worlds_and_their_dimensions(self):
+        self.assertEqual(self.loc.list_worlds(self.saves), ["Mio Mondo"])
+        self.assertEqual([d for d, _ in self.loc.region_dirs(self.world)], ["Overworld", "Nether"])
+
+
 class RotationTests(unittest.TestCase):
     def test_four_rotations_are_identity(self):
         for f in sorted(f for f in os.listdir(TEMPLATES) if f.endswith(".nbt")):

@@ -22,12 +22,13 @@ from PyQt6.QtWidgets import (
     QMessageBox, QCheckBox
 )
 from PyQt6.QtGui import QFont, QIcon, QColor
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
 
 from nbt_codec import load_nbt
 from mca_codec import MCARegion, UnsupportedChunkFormat
 from structure_manager import Structure
 from world_editor import World, inject_structures
+import world_locator
 from map_viewer import MapViewer
 from scraper import search_minecraft_schematics, download_structure, CURATED_ONLINE_CATALOG
 
@@ -241,6 +242,7 @@ class InjectionWorker(QThread):
         self.fill_foundations = fill_foundations
         self.clear_terrain = clear_terrain
         self.skip_modded = skip_modded
+        self.stats = None
 
     def run(self):
         try:
@@ -253,6 +255,7 @@ class InjectionWorker(QThread):
                 skip_modded=self.skip_modded,
                 log=self.progress.emit,
             )
+            self.stats = stats
             self.progress.emit(
                 f"Blocchi piazzati: {stats['placed']}, scavati: {stats['cleared']}, fondamenta: {stats['foundation']}"
             )
@@ -288,21 +291,35 @@ class MinecraftBuilderApp(QMainWindow):
         self.setMinimumSize(1100, 750)
         self.setStyleSheet(DARK_THEME_STYLE)
         
-        # Paths
-        self.saves_dir = None
-        for i, arg in enumerate(sys.argv):
-            if arg == "--saves-dir" and i + 1 < len(sys.argv):
-                self.saves_dir = sys.argv[i + 1].strip('"')
+        # Paths: any world-related path (command line, last session, launcher default) is resolved
+        # to saves folder + world + dimension by world_locator.
+        self.settings = QSettings("MINECRAFT-BUILDER", "MinecraftBuilder")
+        self.pending_world = None
+        self.pending_dimension = None
+        self.available_dims = []
+        self.player_dimension = None
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        arg_path = _path_from_args(sys.argv[1:])
+        self.startup_warning = None
+        if arg_path and not world_locator.resolve(arg_path):
+            self.startup_warning = f"Errore: nessun mondo trovato nel percorso indicato all'avvio: {arg_path}"
+        candidates = [arg_path, self.settings.value("last_path", "", type=str),
+                      world_locator.default_saves_dir(), os.path.join(app_dir, "saves")]
+        found = None
+        for candidate in candidates:
+            found = world_locator.resolve(candidate) if candidate else None
+            if found:
                 break
-                
-        if not self.saves_dir or not os.path.exists(self.saves_dir):
-            self.saves_dir = os.path.expandvars(r"%appdata%\.minecraft\saves")
-        if not os.path.exists(self.saves_dir):
-            self.saves_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saves")
-        if not os.path.exists(self.saves_dir):
-            self.saves_dir = os.path.expanduser("~")
-            
-        self.templates_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+        if found:
+            self.saves_dir = found["saves_dir"]
+            self.pending_world = found["world"]
+            self.pending_dimension = found["dimension"]
+        else:
+            self.saves_dir = world_locator.default_saves_dir()
+            if not os.path.isdir(self.saves_dir):
+                self.saves_dir = os.path.expanduser("~")
+
+        self.templates_dir = os.path.join(app_dir, "templates")
         
         # State Variables
         self.current_world_path = None
@@ -319,7 +336,10 @@ class MinecraftBuilderApp(QMainWindow):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self.scan_worlds)
         
-        self.log("Applicazione avviata. Seleziona una cartella salvataggi di Minecraft.")
+        self.setAcceptDrops(True)
+        self.log("Applicazione avviata. Scegli un mondo con 'Sfoglia...', incolla un percorso o trascina qui una cartella.")
+        if self.startup_warning:
+            self.log(self.startup_warning)
 
     def init_ui(self):
         # Central widget splitter (Sidebar, Map View, Actions Inspector)
@@ -340,12 +360,15 @@ class MinecraftBuilderApp(QMainWindow):
         
         # World Save Directory Selection
         dir_layout = QVBoxLayout()
-        dir_lbl = QLabel("Cartella Salvataggi:")
+        dir_lbl = QLabel("Mondo o cartella salvataggi:")
         dir_lbl.setStyleSheet("font-size: 11px; color: #888896;")
         dir_layout.addWidget(dir_lbl)
-        
+
         self.dir_input = QLineEdit(self.saves_dir)
-        self.dir_input.setReadOnly(True)
+        self.dir_input.setPlaceholderText("Incolla il percorso del mondo e premi Invio")
+        self.dir_input.setToolTip("Va bene la cartella del mondo, una sua sottocartella (region, DIM-1...),\n"
+                                  "la cartella saves o la cartella .minecraft. Puoi anche trascinarla sulla finestra.")
+        self.dir_input.returnPressed.connect(lambda: self.open_path(self.dir_input.text()))
         dir_layout.addWidget(self.dir_input)
         
         dir_btns = QHBoxLayout()
@@ -362,6 +385,13 @@ class MinecraftBuilderApp(QMainWindow):
         
         # Region file selector
         region_layout = QVBoxLayout()
+        dim_lbl = QLabel("Dimensione:")
+        dim_lbl.setStyleSheet("font-size: 11px; color: #888896;")
+        region_layout.addWidget(dim_lbl)
+        self.dim_select = QComboBox()
+        self.dim_select.currentIndexChanged.connect(self.dimension_changed)
+        region_layout.addWidget(self.dim_select)
+
         region_lbl = QLabel("File di Regione (.mca):")
         region_lbl.setStyleSheet("font-size: 11px; color: #888896;")
         region_layout.addWidget(region_lbl)
@@ -561,6 +591,12 @@ class MinecraftBuilderApp(QMainWindow):
         warning_lbl.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 11px; margin-top: 5px;")
         warning_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         inspector_layout.addWidget(warning_lbl)
+
+        sp_lbl = QLabel("Modifica i mondi in Giocatore singolo salvati su questo PC: i server multiplayer non cambiano.")
+        sp_lbl.setStyleSheet("color: #888896; font-size: 10px;")
+        sp_lbl.setWordWrap(True)
+        sp_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        inspector_layout.addWidget(sp_lbl)
         
         # Direct Action Button
         self.apply_btn = QPushButton("Inietta Struttura nel Mondo")
@@ -599,47 +635,109 @@ class MinecraftBuilderApp(QMainWindow):
 
     # Saves loading and folder selectors
     def select_saves_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Seleziona cartella .minecraft/saves", self.saves_dir)
+        folder = QFileDialog.getExistingDirectory(
+            self, "Seleziona il mondo (oppure la cartella saves o .minecraft)", self.current_world_path or self.saves_dir)
         if folder:
-            self.saves_dir = folder
-            self.dir_input.setText(folder)
-            self.scan_worlds()
+            self.open_path(folder)
+
+    def open_path(self, path):
+        """Opens whatever world-related path the user gives (world, region, saves, .minecraft...)."""
+        found = world_locator.resolve(path)
+        if not found:
+            self.log(f"Errore: nessun mondo di Minecraft trovato in {path}")
+            QMessageBox.warning(
+                self, "Mondo non trovato",
+                f"Nel percorso:\n{path}\n\nnon c'e' un mondo di Minecraft (manca level.dat) ne' una cartella saves.\n"
+                "Scegli la cartella del mondo, ad esempio .minecraft\\saves\\NomeMondo.")
+            self.dir_input.setText(self.current_world_path or self.saves_dir)
+            return
+        self.saves_dir = found["saves_dir"]
+        self.pending_world = found["world"]
+        self.pending_dimension = found["dimension"]
+        what = f"mondo '{found['world']}'" if found["world"] else "cartella dei salvataggi"
+        self.log(f"Percorso riconosciuto: {what} ({self.saves_dir})")
+        self.scan_worlds()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if urls:
+            self.open_path(urls[0])
 
     def scan_worlds(self):
+        worlds = world_locator.list_worlds(self.saves_dir)
+        self.world_select.blockSignals(True)
         self.world_select.clear()
-        if not os.path.exists(self.saves_dir):
-            return
-            
-        # List directories in saves
-        worlds = [d for d in os.listdir(self.saves_dir) if os.path.isdir(os.path.join(self.saves_dir, d))]
         self.world_select.addItems(worlds)
-        self.log(f"Scansionati {len(worlds)} mondi salvati.")
-        
-        # Ensure world_changed is automatically triggered for the first world
-        if self.world_select.count() > 0:
-            if self.world_select.currentIndex() == 0:
-                self.world_changed()
-            else:
-                self.world_select.setCurrentIndex(0)
+        self.dir_input.setText(self.saves_dir)
+        self.log(f"Trovati {len(worlds)} mondi in {self.saves_dir}.")
+        if not worlds:
+            self.world_select.blockSignals(False)
+            self.world_changed()
+            return
+        # The requested world, otherwise the most recently played one
+        target = self.pending_world if self.pending_world in worlds else worlds[0]
+        self.pending_world = None
+        self.world_select.setCurrentIndex(worlds.index(target))
+        self.world_select.blockSignals(False)
+        self.world_changed()
 
     def world_changed(self):
         world_name = self.world_select.currentText()
+        self.dim_select.blockSignals(True)
+        self.dim_select.clear()
+        self.available_dims = []
         if not world_name:
             self.current_world_path = None
+            self.dim_select.blockSignals(False)
+            self.region_select.clear()
             self.update_player_info_display()
             return
-            
+
         self.current_world_path = os.path.join(self.saves_dir, world_name)
+        self.dir_input.setText(self.current_world_path)
+        self.settings.setValue("last_path", self.current_world_path)
+        self.available_dims = world_locator.region_dirs(self.current_world_path)
+        labels = [label for label, _ in self.available_dims]
+        self.dim_select.addItems(labels)
+        if labels:
+            want = self.pending_dimension or self._player_dimension_label() or "Overworld"
+            if self.pending_dimension and want not in labels:
+                self.log(f"La dimensione {want} di questo mondo non ha ancora regioni generate: apro {labels[0]}.")
+            self.dim_select.setCurrentIndex(labels.index(want) if want in labels else 0)
+        self.pending_dimension = None
+        self.dim_select.blockSignals(False)
         self.update_player_info_display()
         self.scan_regions()
-        
+
         # Centering player region automatically on world load after a small delay to let UI settle
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(50, self.go_to_player_region)
 
+    def dimension_changed(self):
+        self.scan_regions()
+        self.go_to_player_region()
+
+    def current_dimension_id(self):
+        label = self.dim_select.currentText() or "Overworld"
+        return world_locator.DIMENSION_IDS.get(label, "minecraft:overworld")
+
+    def _player_dimension_label(self):
+        self.load_player_position(quiet=True)
+        for label, dim_id in world_locator.DIMENSION_IDS.items():
+            if dim_id == self.player_dimension:
+                return label
+        return None
+
     def get_region_dir(self):
         if not self.current_world_path:
             return None
+        idx = self.dim_select.currentIndex()
+        if 0 <= idx < len(self.available_dims):
+            return self.available_dims[idx][1]
         region_dir = os.path.join(self.current_world_path, "region")
         if not os.path.exists(region_dir):
             region_dir = os.path.join(self.current_world_path, "dimensions", "minecraft", "overworld", "region")
@@ -651,16 +749,25 @@ class MinecraftBuilderApp(QMainWindow):
             return
 
         region_dir = self.get_region_dir()
-        if not os.path.exists(region_dir):
+        if not region_dir or not os.path.exists(region_dir):
             world_name = os.path.basename(self.current_world_path)
-            self.log(f"Cartella 'region' non trovata in {world_name}!")
+            self.log(f"Nessun file di regione trovato in {world_name}: apri il mondo almeno una volta in Minecraft.")
             return
             
-        # Get all .mca files
-        regions = [f for f in os.listdir(region_dir) if f.endswith(".mca")]
-        regions.sort()
+        # Get all .mca files; open the player's region directly (one load instead of two)
+        regions = sorted(f for f in os.listdir(region_dir) if f.endswith(".mca"))
+        target = 0
+        pos = self.load_player_position(quiet=True)
+        if pos and self.player_dimension in (None, self.current_dimension_id()):
+            name = f"r.{int(pos[0] // 512)}.{int(pos[2] // 512)}.mca"
+            if name in regions:
+                target = regions.index(name)
+        self.region_select.blockSignals(True)
         self.region_select.addItems(regions)
+        self.region_select.setCurrentIndex(target)
+        self.region_select.blockSignals(False)
         self.log(f"Scansionati {len(regions)} file di regione nel mondo.")
+        self.region_changed()
 
     def region_changed(self):
         region_file = self.region_select.currentText()
@@ -679,6 +786,8 @@ class MinecraftBuilderApp(QMainWindow):
             
             # Load player coordinates from world saves
             player_pos = self.load_player_position()
+            if player_pos and self.player_dimension not in (None, self.current_dimension_id()):
+                player_pos = None
             if player_pos:
                 px, py, pz = player_pos
                 self.map_viewer.set_player_position(px, pz)
@@ -692,9 +801,29 @@ class MinecraftBuilderApp(QMainWindow):
             self.current_region = None
             self.map_viewer.set_region(None)
 
-    def load_player_position(self):
+    def load_player_position(self, quiet=False):
         if not self.current_world_path:
             return None
+        log = self.log
+        if quiet:
+            self.log = lambda msg: None
+        try:
+            return self._load_player_position()
+        finally:
+            self.log = log
+
+    @staticmethod
+    def _dimension_id(value):
+        if value is None:
+            return None
+        legacy = {0: "minecraft:overworld", -1: "minecraft:the_nether", 1: "minecraft:the_end"}
+        try:
+            return legacy.get(int(value), "minecraft:overworld")
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _load_player_position(self):
+        self.player_dimension = None
         try:
             # 1. Try reading level.dat Player pos (legacy or modded formats)
             level_path = os.path.join(self.current_world_path, "level.dat")
@@ -705,6 +834,7 @@ class MinecraftBuilderApp(QMainWindow):
                     player = data.get("Player", {})
                     pos_list = player.get("Pos", [])
                     if len(pos_list) >= 3:
+                        self.player_dimension = self._dimension_id(player.get("Dimension", "minecraft:overworld"))
                         self.log(f"Coordinate giocatore lette da level.dat: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                         return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                 except Exception as e:
@@ -740,6 +870,7 @@ class MinecraftBuilderApp(QMainWindow):
                                 p_nbt, _ = load_nbt(p_path)
                                 pos_list = p_nbt.get("Pos", [])
                                 if len(pos_list) >= 3:
+                                    self.player_dimension = self._dimension_id(p_nbt.get("Dimension", "minecraft:overworld"))
                                     self.log(f"Coordinate giocatore lette da {os.path.basename(p_dir)}/{player_uuid_str}.dat: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                                     return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                             except Exception as e:
@@ -756,6 +887,7 @@ class MinecraftBuilderApp(QMainWindow):
                             p_nbt, _ = load_nbt(p_path)
                             pos_list = p_nbt.get("Pos", [])
                             if len(pos_list) >= 3:
+                                self.player_dimension = self._dimension_id(p_nbt.get("Dimension", "minecraft:overworld"))
                                 self.log(f"Coordinate giocatore lette da {os.path.basename(p_dir)}/{os.path.basename(p_path)}: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                                 return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                         except Exception as e:
@@ -766,6 +898,7 @@ class MinecraftBuilderApp(QMainWindow):
                 try:
                     level_nbt, _ = load_nbt(level_path)
                     data = level_nbt.get("Data", {})
+                    self.player_dimension = "minecraft:overworld"
                     spawn = data.get("spawn", {})
                     if spawn and "pos" in spawn:
                         pos = spawn["pos"]
@@ -805,6 +938,9 @@ class MinecraftBuilderApp(QMainWindow):
             self.log("Impossibile trovare la posizione del giocatore!")
             return
             
+        if self.player_dimension not in (None, self.current_dimension_id()):
+            self.log(f"Il giocatore si trova in un'altra dimensione ({self.player_dimension}).")
+            return
         px, py, pz = player_pos
         rx = int(px // 512)
         rz = int(pz // 512)
@@ -1299,6 +1435,7 @@ class MinecraftBuilderApp(QMainWindow):
         
         # Structures crossing the region border are written to the neighbouring regions too
         world = World(self.get_region_dir(), preloaded=[self.current_region])
+        self.last_injected = placements_to_inject
 
         # Instantiate and start the worker thread
         self.injection_thread = InjectionWorker(
@@ -1326,12 +1463,53 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer.heights_cache.clear()
         self.map_viewer.render_map()
         self.map_viewer.update()
+        self.show_injection_summary()
+
+    def teleport_command(self, item):
+        """/tp command that puts the player just south of a placed structure, looking at it."""
+        s = item["structure"]
+        x = item["world_x"] + s.width // 2
+        z = item["world_z"] + s.length + 3
+        y = item["y_coord"]
+        if self.current_region:
+            gx, gz = x - self.current_region.rx * 512, z - self.current_region.rz * 512
+            if 0 <= gx < 512 and 0 <= gz < 512:
+                y = max(y, self.map_viewer.region_heights[gz][gx] + 1)
+        return f"/tp @s {x} {y} {z} 180 10"
+
+    def show_injection_summary(self):
+        """Tells the user exactly where to find the structures in the game."""
+        items = getattr(self, "last_injected", None) or []
+        stats = getattr(getattr(self, "injection_thread", None), "stats", None) or {}
+        if not items:
+            return
+        world = os.path.basename(self.current_world_path or "")
+        dim = self.dim_select.currentText() or "Overworld"
+        if stats and stats.get("placed", 0) == 0:
+            QMessageBox.warning(
+                self, "Nessun blocco inserito",
+                "Nessun blocco e' stato scritto: l'area scelta non e' ancora generata (o e' in un formato vecchio).\n"
+                "Esplora quella zona in gioco, chiudi il mondo e riprova.")
+            return
+        cmd = self.teleport_command(items[0])
+        QApplication.clipboard().setText(cmd)
+        lines = [f"- {it['name']}: X {it['world_x']}, Y {it['y_coord']}, Z {it['world_z']}" for it in items[:8]]
+        if len(items) > 8:
+            lines.append(f"... e altre {len(items) - 8}")
+        self.log(f"Per vederle in gioco: Giocatore singolo -> '{world}', poi {cmd} (copiato negli appunti).")
+        QMessageBox.information(
+            self, "Strutture inserite",
+            f"Strutture inserite nel mondo \"{world}\" ({dim}):\n" + "\n".join(lines) +
+            f"\n\nPer vederle: apri Minecraft -> Giocatore singolo -> \"{world}\".\n"
+            f"Per arrivarci subito scrivi in chat (con i trucchi attivi):\n{cmd}\n"
+            "Il comando e' gia' copiato negli appunti: premi T e poi Ctrl+V.\n\n"
+            "Nota: l'app modifica solo i mondi salvati su questo PC; i server multiplayer non cambiano.")
 
     def on_injection_permission_error(self, err_msg):
         self.log(f"ERRORE DI PERMESSO (Accesso Negato): {err_msg}")
         self.log("Se hai già chiuso il gioco, Windows potrebbe bloccare la scrittura. Risolvi così:")
         self.log("  - Apri Gestione Attività (Ctrl+Shift+Esc), cerca 'javaw.exe' o 'Minecraft' e clicca su 'Termina Attività'.")
-        self.log("  - Esegui PowerShell / Command Prompt come AMMINISTRATORE prima di lanciare 'python main.py'.")
+        self.log("  - Avvia l'app come amministratore con:  py -3 main.py --admin")
         self.log("  - Verifica che la cartella del salvataggio non sia impostata su 'Solo Lettura'.")
 
     def on_injection_error(self, err_msg):
@@ -1343,6 +1521,19 @@ class MinecraftBuilderApp(QMainWindow):
         self.update_player_info_display()
         # Clean up thread
         self.injection_thread = None
+
+
+def _path_from_args(args):
+    """World path from the command line: --world PATH, --saves-dir PATH or a bare path."""
+    for i, arg in enumerate(args):
+        if arg in ("--world", "--saves-dir") and i + 1 < len(args):
+            return args[i + 1].strip('"')
+        if arg.startswith("--saves-dir "):
+            return arg.split(" ", 1)[1].strip('"')
+    for arg in args:
+        if not arg.startswith("-") and os.path.exists(arg.strip('"')):
+            return arg.strip('"')
+    return None
 
 
 def is_minecraft_running():
