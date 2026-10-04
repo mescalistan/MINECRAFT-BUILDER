@@ -22,6 +22,9 @@ sys.path.insert(0, HERE)
 
 from template_builder import REGISTRY
 
+sys.path.insert(0, os.path.join(HERE, ".."))
+import catalog
+
 TEMPLATES_DIR = os.path.join(HERE, "..", "templates")
 CATALOG_PATH = os.path.join(TEMPLATES_DIR, "catalog.json")
 
@@ -42,16 +45,16 @@ def build(name):
 
 
 def write_catalog(reg):
-    catalog = []
-    for name, entry in sorted(reg.items(), key=lambda kv: (kv[1]["category"], kv[1]["title"])):
-        catalog.append({
+    entries = []
+    for name, entry in sorted(reg.items(), key=lambda kv: (catalog.category_for(kv[0]), kv[1]["title"])):
+        entries.append({
             "file": f"{name}.nbt",
             "title": entry["title"],
-            "category": entry["category"],
+            "category": catalog.category_for(name),
             "description": entry["description"],
         })
     with open(CATALOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(catalog, f, ensure_ascii=False, indent=1)
+        json.dump(entries, f, ensure_ascii=False, indent=1)
 
 
 def main(argv):

@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QListWidget, QListWidgetItem,
     QTabWidget, QLineEdit, QSplitter, QSpinBox, QTextEdit, QComboBox,
-    QMessageBox, QCheckBox
+    QMessageBox, QCheckBox, QTreeWidget, QTreeWidgetItem, QDialog, QDialogButtonBox, QFormLayout
 )
 from PyQt6.QtGui import QFont, QIcon, QColor
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
@@ -29,6 +29,12 @@ from mca_codec import MCARegion, UnsupportedChunkFormat
 from structure_manager import Structure
 from world_editor import World, inject_structures
 import world_locator
+import json
+import catalog
+import structure_generators as sgen
+import village_generator as vgen
+import world_extractor
+from world_editor import WorldTerrain
 from map_viewer import MapViewer
 from scraper import search_minecraft_schematics, download_structure, CURATED_ONLINE_CATALOG
 
@@ -421,7 +427,13 @@ class MinecraftBuilderApp(QMainWindow):
         local_layout = QVBoxLayout(local_tab)
         local_layout.setContentsMargins(4, 4, 4, 4)
         
-        self.local_list = QListWidget()
+        self.library_search = QLineEdit()
+        self.library_search.setPlaceholderText("Cerca struttura (nome, categoria...)")
+        self.library_search.textChanged.connect(self.filter_library)
+        local_layout.addWidget(self.library_search)
+
+        self.local_list = QTreeWidget()
+        self.local_list.setHeaderHidden(True)
         self.local_list.itemSelectionChanged.connect(self.local_structure_selected)
         local_layout.addWidget(self.local_list)
         
@@ -458,6 +470,85 @@ class MinecraftBuilderApp(QMainWindow):
         online_layout.addWidget(self.download_btn)
         
         self.tabs.addTab(online_tab, "Online")
+
+        def hint(text):
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet("font-size: 11px; color: #a0a0b0;")
+            return lbl
+
+        # Tab 3: bridges
+        bridge_tab = QWidget()
+        bl = QVBoxLayout(bridge_tab)
+        bl.setContentsMargins(6, 6, 6, 6)
+        bl.addWidget(QLabel("Stile del ponte:"))
+        self.bridge_style = QComboBox()
+        for key, spec in sgen.BRIDGE_STYLES.items():
+            self.bridge_style.addItem(spec["title"], key)
+        bl.addWidget(self.bridge_style)
+        self.draw_bridge_btn = QPushButton("Disegna ponte tra due sponde")
+        self.draw_bridge_btn.clicked.connect(self.start_bridge_mode)
+        bl.addWidget(self.draw_bridge_btn)
+        bl.addWidget(hint("Clicca sulla mappa la prima sponda e poi la seconda: lunghezza e altezza vengono "
+                          "calcolate da sole. Se parti vicino alla fine di un ponte gia' presente (in coda o "
+                          "costruito prima), il nuovo lo prosegue senza interruzioni, nello stesso stile e alla "
+                          "stessa altezza. Esc per annullare."))
+        length_row = QHBoxLayout()
+        length_row.addWidget(QLabel("Lunghezza:"))
+        self.bridge_length = QSpinBox()
+        self.bridge_length.setRange(7, 500)
+        self.bridge_length.setValue(25)
+        length_row.addWidget(self.bridge_length)
+        self.apply_length_btn = QPushButton("Applica")
+        self.apply_length_btn.setEnabled(False)
+        self.apply_length_btn.clicked.connect(self.apply_bridge_length)
+        length_row.addWidget(self.apply_length_btn)
+        bl.addLayout(length_row)
+        self.bridge_info = hint("Seleziona un ponte dall'elenco (categoria Ponti) per allungarlo o accorciarlo "
+                                "mantenendo lo stesso stile.")
+        bl.addWidget(self.bridge_info)
+        bl.addStretch()
+        self.tabs.addTab(bridge_tab, "Ponti")
+
+        # Tab 4: villages
+        village_tab = QWidget()
+        vl = QVBoxLayout(village_tab)
+        vl.setContentsMargins(6, 6, 6, 6)
+        vl.addWidget(QLabel("Tipo di villaggio:"))
+        self.village_style = QComboBox()
+        for key, spec in vgen.STYLES.items():
+            self.village_style.addItem(spec["title"], key)
+        vl.addWidget(self.village_style)
+        vl.addWidget(QLabel("Dimensione:"))
+        self.village_size = QComboBox()
+        for key in vgen.SIZES:
+            self.village_size.addItem(f"{key.capitalize()} ({vgen.SIZES[key][0]} edifici)", key)
+        self.village_size.setCurrentIndex(1)
+        vl.addWidget(self.village_size)
+        self.village_btn = QPushButton("Scegli il centro sulla mappa")
+        self.village_btn.clicked.connect(self.start_village_mode)
+        vl.addWidget(self.village_btn)
+        vl.addWidget(hint("Clicca il punto centrale: il villaggio crea piazza, strade, case con la porta verso "
+                          "la strada, fattorie e lampioni, evitando acqua e pendii. Ogni edificio si appoggia al "
+                          "terreno. Il villaggio va in coda come un'unica voce: controllalo sulla mappa e poi "
+                          "premi Inietta."))
+        vl.addStretch()
+        self.tabs.addTab(village_tab, "Villaggio")
+
+        # Tab 5: cut an area of a world as a structure
+        cut_tab = QWidget()
+        cl = QVBoxLayout(cut_tab)
+        cl.setContentsMargins(6, 6, 6, 6)
+        self.cut_btn = QPushButton("Seleziona l'area da ritagliare")
+        self.cut_btn.clicked.connect(self.start_cut_mode)
+        cl.addWidget(self.cut_btn)
+        cl.addWidget(hint("Trascina un rettangolo sulla mappa del mondo da cui copiare. La zona viene salvata "
+                          "come struttura nella categoria Ritagli. Con 'Solo costruzioni' il terreno originale "
+                          "non viene copiato: quando la incolli su un'altra mappa si appoggia al nuovo terreno "
+                          "(cantine comprese) e le fondamenta riempiono i vuoti. Con 'Tutto' viene copiata "
+                          "anche la terra."))
+        cl.addStretch()
+        self.tabs.addTab(cut_tab, "Ritagli")
         
         main_splitter.addWidget(sidebar)
         
@@ -471,6 +562,10 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer.hover_changed.connect(self.update_hover_coordinates)
         self.map_viewer.structure_placed.connect(self.lock_placement_coordinate)
         self.map_viewer.rotate_requested.connect(self.rotate_current_structure)
+        self.map_viewer.bridge_requested.connect(self.on_bridge_requested)
+        self.map_viewer.area_selected.connect(self.on_area_selected)
+        self.map_viewer.point_selected.connect(self.on_village_center)
+        self.map_viewer.mode_cancelled.connect(lambda: self.log("Operazione annullata."))
         center_layout.addWidget(self.map_viewer)
         
         # Coordinates status bar at bottom
@@ -968,14 +1063,58 @@ class MinecraftBuilderApp(QMainWindow):
             self.log(f"Il file di regione {target_region_file} non esiste in questo mondo!")
 
     # Local structures management
-    def load_local_templates(self):
+    def load_local_templates(self, select=None):
+        """Fills the library tree, grouped by category."""
+        self.local_list.blockSignals(True)
         self.local_list.clear()
-        if not os.path.exists(self.templates_dir):
-            os.makedirs(self.templates_dir, exist_ok=True)
-            
-        files = [f for f in os.listdir(self.templates_dir) if f.endswith(('.nbt', '.schem', '.schematic'))]
-        for f in files:
-            self.local_list.addItem(f)
+        os.makedirs(self.templates_dir, exist_ok=True)
+        groups = {}
+        for entry in catalog.load_catalog(self.templates_dir):
+            cat = entry["category"]
+            if cat not in groups:
+                top = QTreeWidgetItem([cat])
+                top.setFlags(top.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                top.setData(0, Qt.ItemDataRole.UserRole + 1, cat)
+                self.local_list.addTopLevelItem(top)
+                groups[cat] = top
+            child = QTreeWidgetItem([entry["title"]])
+            child.setData(0, Qt.ItemDataRole.UserRole, entry)
+            child.setToolTip(0, f"{entry['file']}\n{entry.get('description', '')}")
+            groups[cat].addChild(child)
+        for top in groups.values():
+            top.setText(0, f"{top.text(0)} ({top.childCount()})")
+        self.local_list.blockSignals(False)
+        self.filter_library(self.library_search.text())
+        if select:
+            self.select_template_file(select)
+
+    def library_items(self):
+        for i in range(self.local_list.topLevelItemCount()):
+            top = self.local_list.topLevelItem(i)
+            for j in range(top.childCount()):
+                yield top, top.child(j)
+
+    def select_template_file(self, filename):
+        for top, child in self.library_items():
+            if child.data(0, Qt.ItemDataRole.UserRole)["file"] == filename:
+                top.setExpanded(True)
+                self.local_list.setCurrentItem(child)
+                return True
+        return False
+
+    def filter_library(self, text):
+        query = text.strip().lower()
+        visible = {}
+        for top, child in self.library_items():
+            e = child.data(0, Qt.ItemDataRole.UserRole)
+            hay = " ".join((e["title"], e["file"], e.get("description", ""), e["category"])).lower()
+            match = not query or query in hay
+            child.setHidden(not match)
+            visible[id(top)] = visible.get(id(top), 0) + int(match)
+        for i in range(self.local_list.topLevelItemCount()):
+            top = self.local_list.topLevelItem(i)
+            top.setHidden(visible.get(id(top), 0) == 0)
+            top.setExpanded(bool(query) and visible.get(id(top), 0) > 0)
 
     def import_custom_structure(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Apri file struttura", "", "Minecraft Structure (*.nbt *.schem *.schematic)")
@@ -984,12 +1123,7 @@ class MinecraftBuilderApp(QMainWindow):
             dest = os.path.join(self.templates_dir, os.path.basename(file_path))
             try:
                 shutil.copy2(file_path, dest)
-                self.load_local_templates()
-                # Find and select the imported item
-                for i in range(self.local_list.count()):
-                    if self.local_list.item(i).text() == os.path.basename(file_path):
-                        self.local_list.setCurrentRow(i)
-                        break
+                self.load_local_templates(select=os.path.basename(file_path))
                 self.log(f"Importato {os.path.basename(file_path)} con successo.")
             except Exception as e:
                 self.log(f"Impossibile importare il file: {e}")
@@ -998,16 +1132,17 @@ class MinecraftBuilderApp(QMainWindow):
         selected_items = self.local_list.selectedItems()
         if not selected_items:
             return
-            
-        filename = selected_items[0].text()
-        file_path = os.path.join(self.templates_dir, filename)
-        
-        self.load_structure_file(file_path, filename)
+        entry = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
+        if not entry:
+            return
+        self.selected_entry = entry
+        self.load_structure_file(os.path.join(self.templates_dir, entry["file"]), entry["file"])
 
     def load_structure_file(self, file_path, name):
         try:
             self.selected_structure = Structure.load(file_path)
             self.selected_structure_name = name
+            self.selected_rotation = 0
             self.map_viewer.set_selected_structure(self.selected_structure)
             
             self.update_structure_info()
@@ -1024,6 +1159,7 @@ class MinecraftBuilderApp(QMainWindow):
 
             # Update check box status
             self.check_injection_readiness()
+            self.update_bridge_controls()
         except Exception as e:
             self.log(f"Errore nel caricamento della struttura: {e}")
             self.selected_structure = None
@@ -1094,13 +1230,8 @@ class MinecraftBuilderApp(QMainWindow):
         
         if success:
             self.log(f"Download completato: salvato come {filename}")
-            self.load_local_templates()
-            # Switch tab to local and select it
             self.tabs.setCurrentIndex(0)
-            for i in range(self.local_list.count()):
-                if self.local_list.item(i).text() == filename:
-                    self.local_list.setCurrentRow(i)
-                    break
+            self.load_local_templates(select=filename)
         else:
             self.log("Errore nel download. Il link potrebbe richiedere l'accesso al sito web.")
 
@@ -1118,7 +1249,7 @@ class MinecraftBuilderApp(QMainWindow):
                 self.y_spinbox.setValue(avg_h)
             else:
                 # The structure's first layer goes on the block above the terrain
-                self.y_spinbox.setValue(height_y + 1)
+                self.y_spinbox.setValue(height_y + 1 - self._ground_offset())
 
     def lock_placement_coordinate(self, grid_x, grid_z):
         self.locked_placement = (grid_x, grid_z)
@@ -1134,7 +1265,7 @@ class MinecraftBuilderApp(QMainWindow):
             
             heights = self.map_viewer.get_chunk_heightmap(cx, cz) if 0 <= grid_x < 512 and 0 <= grid_z < 512 else None
             if heights:
-                self.y_spinbox.setValue(heights[bz * 16 + bx] + 1)
+                self.y_spinbox.setValue(heights[bz * 16 + bx] + 1 - self._ground_offset())
             
         world_x = self.current_region.rx * 512 + grid_x
         world_z = self.current_region.rz * 512 + grid_z
@@ -1158,7 +1289,7 @@ class MinecraftBuilderApp(QMainWindow):
         # Copy the structure object so it is frozen in its current state
         import copy
         structure_copy = copy.copy(self.selected_structure)
-        
+
         item_data = {
             "structure": structure_copy,
             "world_x": item_x,
@@ -1167,17 +1298,9 @@ class MinecraftBuilderApp(QMainWindow):
             "name": s_name,
             "preview_pixmap": self.map_viewer.structure_preview_pixmap
         }
-        
-        self.staged_placements.append(item_data)
-        
-        # Add to UI list widget
-        self.staged_list.addItem(display_name)
-        
-        # Update map_viewer list of staged placements
-        self.map_viewer.staged_placements = self.staged_placements
-        self.map_viewer.update()
-        
-        self.log(f"Aggiunta in coda: {display_name}")
+        if getattr(structure_copy, "bridge", None) or self.bridge_style_of_selection():
+            item_data["extend_columns"] = True  # bridge piers go down to the bottom
+        self.add_staged(item_data, display_name)
         
         # Reset current locked placement to let them choose next location/structure
         self.locked_placement = None
@@ -1186,6 +1309,224 @@ class MinecraftBuilderApp(QMainWindow):
         self.lock_feedback_lbl.setStyleSheet("color: #e67e22; font-weight: bold; font-size: 11px;")
         
         self.check_injection_readiness()
+
+    def add_staged(self, item, display_name, quiet=False):
+        """Adds a placement (or a group of placements) to the injection queue."""
+        self.staged_placements.append(item)
+        self.staged_list.addItem(display_name)
+        self.map_viewer.staged_placements = self.staged_placements
+        self.map_viewer.update()
+        if not quiet:
+            self.log(f"Aggiunta in coda: {display_name}")
+        self.check_injection_readiness()
+
+    @staticmethod
+    def flatten_placements(items):
+        flat = []
+        for item in items:
+            if item.get("kind") == "group":
+                flat.extend(item["items"])
+            else:
+                flat.append(item)
+        return flat
+
+    def _ground_offset(self):
+        return getattr(self.selected_structure, "ground_offset", 0) if self.selected_structure else 0
+
+    def _world_of(self, grid_x, grid_z):
+        return self.current_region.rx * 512 + grid_x, self.current_region.rz * 512 + grid_z
+
+    def _edit_world(self):
+        return World(self.get_region_dir(), preloaded=[self.current_region])
+
+    # ---- Bridges ----
+    def bridge_style_of_selection(self):
+        s = self.selected_structure
+        if s is None:
+            return None
+        if getattr(s, "bridge", None):
+            return s.bridge["style"]
+        entry = getattr(self, "selected_entry", None)
+        if entry and entry.get("bridge_style") and entry["file"] == self.selected_structure_name:
+            return entry["bridge_style"]
+        return None
+
+    def update_bridge_controls(self):
+        style = self.bridge_style_of_selection()
+        self.apply_length_btn.setEnabled(style is not None)
+        if style:
+            s = self.selected_structure
+            length = s.bridge["length"] if getattr(s, "bridge", None) else max(s.width, s.length)
+            self.bridge_length.setValue(length)
+            idx = self.bridge_style.findData(style)
+            if idx >= 0:
+                self.bridge_style.setCurrentIndex(idx)
+            self.bridge_info.setText(f"Ponte selezionato: {sgen.BRIDGE_STYLES[style]['title']}, {length} blocchi. "
+                                     "Cambia la lunghezza e premi Applica: lo stile resta lo stesso.")
+        else:
+            self.bridge_info.setText("Seleziona un ponte dall'elenco (categoria Ponti) per allungarlo o accorciarlo "
+                                     "mantenendo lo stesso stile.")
+
+    def apply_bridge_length(self):
+        style = self.bridge_style_of_selection()
+        if not style:
+            return
+        s = sgen.make_bridge(style, self.bridge_length.value())
+        steps = getattr(self, "selected_rotation", 0) % 4
+        if steps:
+            s = s.rotate(90 * steps)
+        self.selected_structure = s
+        self.selected_structure_name = f"{sgen.BRIDGE_STYLES[style]['title']} ({s.bridge['length']} blocchi)"
+        self.map_viewer.set_selected_structure(s, keep_lock=self.locked_placement is not None)
+        self.update_structure_info()
+        self.update_bridge_controls()
+        self.check_injection_readiness()
+        self.log(f"Ponte ridimensionato a {s.bridge['length']} blocchi nello stile '{sgen.BRIDGE_STYLES[style]['title']}'.")
+
+    def start_bridge_mode(self):
+        if not self.current_region:
+            self.log("Apri prima un mondo.")
+            return
+        self.map_viewer.set_mode("bridge")
+        self.map_viewer.setFocus()
+        self.log("Ponte: clicca sulla mappa la prima sponda, poi la seconda (Esc per annullare).")
+
+    @staticmethod
+    def bank_height(world, x, z):
+        top = world.surface_y(x, z)
+        if top is None:
+            return None
+        name = world.get_block_name(x, top, z) or ""
+        if "water" in name or "lava" in name:
+            return top
+        ground = world.ground_y(x, z, top)
+        return ground if ground is not None else top
+
+    def bridges_file(self):
+        return os.path.join(self.current_world_path, "minecraft_builder.json") if self.current_world_path else None
+
+    def known_bridges(self):
+        path = self.bridges_file()
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError, TypeError):
+            return []
+        return data.get("bridges", {}).get(self.current_dimension_id(), [])
+
+    def record_bridges(self, items):
+        bridges = [i["bridge"] for i in items if i.get("bridge")]
+        path = self.bridges_file()
+        if not bridges or not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault("bridges", {}).setdefault(self.current_dimension_id(), []).extend(bridges)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+
+    def on_bridge_requested(self, ax, az, bx, bz):
+        self.map_viewer.set_mode("place")
+        world = self._edit_world()
+        a, b = self._world_of(ax, az), self._world_of(bx, bz)
+        ha, hb = self.bank_height(world, *a), self.bank_height(world, *b)
+        if ha is None or hb is None:
+            self.log("Errore: una delle due sponde e' in una zona non generata (o in formato vecchio).")
+            return
+        existing = self.known_bridges() + [p["bridge"] for p in self.flatten_placements(self.staged_placements)
+                                           if p.get("bridge")]
+        terrain = WorldTerrain(world)
+        steps = max(abs(b[0] - a[0]), abs(b[1] - a[1]), 1)
+        water = [terrain.height(round(a[0] + (b[0] - a[0]) * i / steps), round(a[1] + (b[1] - a[1]) * i / steps))
+                 for i in range(steps + 1)
+                 if terrain.is_water(round(a[0] + (b[0] - a[0]) * i / steps), round(a[1] + (b[1] - a[1]) * i / steps))]
+        plan = sgen.bridge_between(self.bridge_style.currentData(), a, b, ha, hb, existing,
+                                   water_level=max(water) if water else None)
+        info = plan["bridge"]
+        self.add_staged(plan, f"{plan['name']} (X {plan['world_x']}, Z {plan['world_z']}, piano Y {info['deck']})")
+        if plan["snapped"]:
+            self.log("Il nuovo ponte prosegue quello esistente: stesso stile, stesso asse e stessa altezza.")
+
+    # ---- Villages ----
+    def start_village_mode(self):
+        if not self.current_region:
+            self.log("Apri prima un mondo.")
+            return
+        self.map_viewer.set_mode("point")
+        self.map_viewer.setFocus()
+        self.log("Villaggio: clicca sulla mappa il punto centrale (Esc per annullare).")
+
+    def on_village_center(self, grid_x, grid_z):
+        self.map_viewer.set_mode("place")
+        terrain = WorldTerrain(self._edit_world())
+        style, size = self.village_style.currentData(), self.village_size.currentData()
+
+        def load(name):
+            return Structure.load(os.path.join(self.templates_dir, name + ".nbt"))
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = vgen.generate_village(self._world_of(grid_x, grid_z), style, size, terrain, load)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.log(result["report"])
+        if not result["placements"]:
+            QMessageBox.warning(self, "Villaggio", result["report"])
+            return
+        items = list(result["placements"])
+        if result["path_cells"]:
+            items.append({"kind": "path", "cells": result["path_cells"], "block": result["path_block"],
+                          "name": "strade del villaggio"})
+        lamp = sgen.lamp_post(result["lamp_wood"])
+        for x, z, y in result["lamps"]:
+            items.append({"structure": lamp, "world_x": x, "world_z": z, "y_coord": y, "name": "lampione"})
+        title = vgen.STYLES[style]["title"]
+        self.add_staged({"kind": "group", "items": items, "name": title},
+                        f"{title}: {len(result['placements'])} edifici, strade e lampioni")
+
+    # ---- Cut an area ----
+    def start_cut_mode(self):
+        if not self.current_region:
+            self.log("Apri prima il mondo da cui ritagliare.")
+            return
+        self.map_viewer.set_mode("select")
+        self.map_viewer.setFocus()
+        self.log("Ritaglio: trascina sulla mappa un rettangolo intorno alla zona da copiare (Esc per annullare).")
+
+    def on_area_selected(self, x1, z1, x2, z2):
+        self.map_viewer.set_mode("place")
+        wx1, wz1 = self._world_of(x1, z1)
+        wx2, wz2 = self._world_of(x2, z2)
+        world_name = os.path.basename(self.current_world_path or "mondo")
+        dlg = CutDialog(self, f"Ritaglio {world_name} {wx1} {wz1}", wx2 - wx1 + 1, wz2 - wz1 + 1)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            self.log("Ritaglio annullato.")
+            return
+        title, mode, trees = dlg.values()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            struct, info = world_extractor.extract_area(self._edit_world(), wx1, wz1, wx2, wz2, mode=mode,
+                                                        include_trees=trees)
+        except ValueError as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Ritaglio", str(e))
+            return
+        QApplication.restoreOverrideCursor()
+        path = world_extractor.unique_path(self.templates_dir, title)
+        world_extractor.save_structure(struct, path, {"source": world_name, "mode": mode,
+                                                      "area": f"{wx1},{wz1} {wx2},{wz2}"})
+        desc = (f"Ritaglio da '{world_name}' (X {wx1}..{wx2}, Z {wz1}..{wz2}): {info['blocks']} blocchi"
+                + (", terreno compreso." if mode == "tutto" else ", solo costruzioni."))
+        catalog.add_user_entry(os.path.basename(path), title, "Ritagli", desc)
+        self.log(f"Ritaglio salvato: {os.path.basename(path)} ({struct.width}x{struct.height}x{struct.length}, "
+                 f"{info['blocks']} blocchi). Lo trovi nella categoria Ritagli.")
+        if info["missing_columns"]:
+            self.log(f"Avviso: {info['missing_columns']} colonne dell'area non erano generate e sono state saltate.")
+        self.tabs.setCurrentIndex(0)
+        self.load_local_templates(select=os.path.basename(path))
 
     def remove_selected_staged(self):
         selected_rows = [self.staged_list.row(item) for item in self.staged_list.selectedItems()]
@@ -1253,7 +1594,7 @@ class MinecraftBuilderApp(QMainWindow):
                     total_height += self.map_viewer.region_heights[gz][gx]
                     count += 1
         if count > 0:
-            return int(round(total_height / count)) + 1
+            return int(round(total_height / count)) + 1 - self._ground_offset()
         return 64
 
     def suggest_optimal_position(self):
@@ -1351,6 +1692,7 @@ class MinecraftBuilderApp(QMainWindow):
     def rotate_current_structure(self):
         if self.selected_structure:
             self.selected_structure = self.selected_structure.rotate(90)
+            self.selected_rotation = getattr(self, "selected_rotation", 0) + 1
             # Keep the locked position: rotating should not move the placement
             self.map_viewer.set_selected_structure(self.selected_structure, keep_lock=self.locked_placement is not None)
             self.log("Struttura ruotata di 90° in senso orario.")
@@ -1395,7 +1737,7 @@ class MinecraftBuilderApp(QMainWindow):
         # Determine items to inject
         placements_to_inject = []
         if self.staged_placements:
-            placements_to_inject = list(self.staged_placements)
+            placements_to_inject = self.flatten_placements(self.staged_placements)
         elif self.selected_structure and self.locked_placement is not None:
             grid_x, grid_z = self.locked_placement
             y_coord = self.y_spinbox.value()
@@ -1411,7 +1753,8 @@ class MinecraftBuilderApp(QMainWindow):
             self.log("Nessuna struttura posizionata o in coda da iniettare.")
             return
             
-        old_format = [p["name"] for p in placements_to_inject if p["structure"].is_pre_flattening()]
+        old_format = [p["name"] for p in placements_to_inject
+                      if "structure" in p and p["structure"].is_pre_flattening()]
         if old_format:
             QMessageBox.critical(
                 self, "Formato non supportato",
@@ -1454,6 +1797,7 @@ class MinecraftBuilderApp(QMainWindow):
 
     def on_injection_success(self):
         self.log("Tutte le strutture sono state iniettate con successo!")
+        self.record_bridges(getattr(self, "last_injected", None) or [])
         
         # Clear queue after successful write
         if self.staged_placements:
@@ -1479,7 +1823,7 @@ class MinecraftBuilderApp(QMainWindow):
 
     def show_injection_summary(self):
         """Tells the user exactly where to find the structures in the game."""
-        items = getattr(self, "last_injected", None) or []
+        items = [i for i in (getattr(self, "last_injected", None) or []) if "structure" in i and i.get("name") != "lampione"]
         stats = getattr(getattr(self, "injection_thread", None), "stats", None) or {}
         if not items:
             return
@@ -1521,6 +1865,32 @@ class MinecraftBuilderApp(QMainWindow):
         self.update_player_info_display()
         # Clean up thread
         self.injection_thread = None
+
+
+class CutDialog(QDialog):
+    """Name and options of a cut area."""
+
+    def __init__(self, parent, default_title, width, length):
+        super().__init__(parent)
+        self.setWindowTitle("Salva la zona come struttura")
+        form = QFormLayout(self)
+        form.addRow(QLabel(f"Area selezionata: {width} x {length} blocchi"))
+        self.title_edit = QLineEdit(default_title)
+        form.addRow("Nome:", self.title_edit)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Solo costruzioni (si adatta al nuovo terreno)", "costruzioni")
+        self.mode_combo.addItem("Tutto, terreno compreso", "tutto")
+        form.addRow("Cosa copiare:", self.mode_combo)
+        self.trees_check = QCheckBox("Includi gli alberi")
+        form.addRow("", self.trees_check)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def values(self):
+        return (self.title_edit.text().strip() or "Ritaglio", self.mode_combo.currentData(),
+                self.trees_check.isChecked())
 
 
 def _path_from_args(args):

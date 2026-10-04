@@ -17,7 +17,7 @@ def _state(name):
     return TAG_Compound({"Name": TAG_String("minecraft:" + name)})
 
 
-def make_chunk(chunk_x, chunk_z, ground_y=GROUND_Y, status="minecraft:full"):
+def make_chunk(chunk_x, chunk_z, ground_y=GROUND_Y, status="minecraft:full", new_encoding=False):
     palette = [_state("air"), _state("stone"), _state("dirt"), _state("grass_block")]
     sections = TAG_List(10)
     for sy in range(-4, 20):
@@ -37,10 +37,10 @@ def make_chunk(chunk_x, chunk_z, ground_y=GROUND_Y, status="minecraft:full"):
             "biomes": TAG_Compound({"palette": TAG_List(8, [TAG_String("minecraft:plains")])}),
             "SkyLight": TAG_Byte_Array(b"\xff" * 2048),
         })
-        write_section_indices(sec, palette, indices)
+        write_section_indices(sec, palette, indices, new_encoding)
         sections.append(sec)
     chunk = TAG_Compound({
-        "DataVersion": TAG_Int(3955),
+        "DataVersion": TAG_Int(5023 if new_encoding else 3955),
         "xPos": TAG_Int(chunk_x),
         "zPos": TAG_Int(chunk_z),
         "yPos": TAG_Int(-4),
@@ -54,12 +54,12 @@ def make_chunk(chunk_x, chunk_z, ground_y=GROUND_Y, status="minecraft:full"):
     return chunk
 
 
-def make_region(region_dir, rx, rz, chunks=None, ground_y=GROUND_Y):
+def make_region(region_dir, rx, rz, chunks=None, ground_y=GROUND_Y, new_encoding=False):
     """chunks: iterable of local (cx, cz); default all 1024."""
     os.makedirs(region_dir, exist_ok=True)
     region = MCARegion(os.path.join(region_dir, f"r.{rx}.{rz}.mca"))
     keys = chunks if chunks is not None else [(cx, cz) for cz in range(32) for cx in range(32)]
-    template = nbt_to_bytes(make_chunk(0, 0, ground_y))
+    template = nbt_to_bytes(make_chunk(0, 0, ground_y, new_encoding=new_encoding))
     for cx, cz in keys:
         # Cheap copy: re-parse the template bytes and patch the coordinates
         chunk, _ = parse_nbt_bytes(template)

@@ -19,7 +19,7 @@ from mca_codec import (
     read_world_surface, surface_heights,
 )
 from structure_manager import Structure
-from world_editor import World, inject_structures
+from world_editor import World, inject_structures, upgrade_block
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 TEMPLATES = os.path.join(ROOT, "templates")
@@ -316,7 +316,8 @@ class TemplateLibraryTests(unittest.TestCase):
                     got = cache[key][((gy & 15) << 8) | ((gz & 15) << 4) | (gx & 15)]
                     expected_props = {k: str(v) for k, v in block.get("Properties", {}).items()}
                     got_props = {k: str(v) for k, v in got.get("Properties", {}).items()}
-                    self.assertEqual((got["Name"], got_props), (block["Name"], expected_props),
+                    expected_name = upgrade_block(block, 3955)["Name"]
+                    self.assertEqual((got["Name"], got_props), (expected_name, expected_props),
                                      f"{p['name']} {(x, y, z)}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -332,6 +333,202 @@ class BuilderTests(unittest.TestCase):
         shapes = {b.cells[p][1]["shape"] for p in ((0, 0, 0), (8, 0, 0), (0, 0, 8), (8, 0, 8))}
         self.assertTrue(all(s.startswith("outer") for s in shapes), shapes)
         self.assertEqual(b.cells[(4, 0, 0)][1]["shape"], "straight")
+
+
+class NewChunkFormatTests(unittest.TestCase):
+    """Minecraft 26.x: block states as strings / {id, properties}, mixed lists wrapped as {"": ...}."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        make_region(self.tmp, 0, 0, chunks=[(cx, cz) for cx in range(3) for cz in range(3)], new_encoding=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_normalize_all_encodings(self):
+        from mca_codec import normalize_state
+        self.assertEqual(normalize_state(TAG_String("minecraft:stone")), {"Name": "minecraft:stone"})
+        self.assertEqual(normalize_state(TAG_Compound({"": TAG_String("minecraft:dirt")})), {"Name": "minecraft:dirt"})
+        s = normalize_state(TAG_Compound({"id": TAG_String("minecraft:oak_log"),
+                                          "properties": TAG_Compound({"axis": TAG_String("y")})}))
+        self.assertEqual((s["Name"], dict(s["Properties"])), ("minecraft:oak_log", {"axis": "y"}))
+
+    def test_injection_keeps_the_new_encoding(self):
+        world = World(self.tmp)
+        cottage = Structure.load(os.path.join(TEMPLATES, "starter_cottage.nbt"))
+        old = Structure(1, 2, 1, {(0, 0, 0): {"Name": "minecraft:chain", "Properties": {"axis": "y"}},
+                                   (0, 1, 0): {"Name": "minecraft:grass", "Properties": {}}}, 2580)
+        stats = inject_structures(world, [
+            {"structure": cottage, "world_x": 5, "world_z": 5, "y_coord": GROUND_Y + 1, "name": "c"},
+            {"structure": old, "world_x": 30, "world_z": 30, "y_coord": GROUND_Y + 1, "name": "old"}])
+        world.save(backup=False)
+        region = MCARegion(os.path.join(self.tmp, "r.0.0.mca"))
+        for key in list(region.chunks):
+            chunk, _ = region.chunks[key]
+            for sec in chunk["sections"]:
+                for e in sec["block_states"]["palette"]:
+                    self.assertFalse(hasattr(e, "keys") and "Name" in e, f"palette in formato vecchio in {key}")
+        world = World(self.tmp)
+        self.assertEqual(str(world.get_block(5 + 5, GROUND_Y + 2, 5 + 9)["Name"]), "minecraft:oak_door")
+        self.assertEqual(str(world.get_block(30, GROUND_Y + 1, 30)["Name"]), "minecraft:iron_chain")
+        self.assertEqual(str(world.get_block(30, GROUND_Y + 2, 30)["Name"]), "minecraft:short_grass")
+        self.assertEqual(stats["placed"], 424 + 2)
+
+
+class FoundationLimitTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        make_region(self.tmp, 0, 0, chunks=[(0, 0), (1, 0)])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_floating_and_water_structures_are_not_propped_up(self):
+        world = World(self.tmp)
+        slab = Structure(3, 1, 3, {(x, 0, z): {"Name": "minecraft:stone", "Properties": {}}
+                                   for x in range(3) for z in range(3)})
+        for x in range(20, 23):
+            for z in range(0, 3):
+                world.set_block(x, GROUND_Y + 1, z, state("water", level="0"))
+        stats = inject_structures(world, [
+            {"structure": slab, "world_x": 0, "world_z": 0, "y_coord": GROUND_Y + 30, "name": "in cielo"},
+            {"structure": slab, "world_x": 20, "world_z": 0, "y_coord": GROUND_Y + 2, "name": "sull'acqua"},
+            {"structure": slab, "world_x": 10, "world_z": 0, "y_coord": GROUND_Y + 4, "name": "poco sollevata"}])
+        self.assertEqual(stats["foundation"], 9 * 3)  # only the slightly raised one
+
+
+class CatalogTests(unittest.TestCase):
+    def test_every_structure_has_an_italian_category(self):
+        import catalog
+        entries = catalog.load_catalog(TEMPLATES)
+        self.assertEqual(len(entries), len([f for f in os.listdir(TEMPLATES) if f.endswith(".nbt")]))
+        self.assertTrue(all(e["category"] in catalog.CATEGORIES and e["category"] != "Altro" for e in entries),
+                        [e["file"] for e in entries if e["category"] == "Altro"])
+        self.assertEqual({e["file"] for e in entries if e["category"] == "Ponti"},
+                         {"stone_bridge.nbt", "suspension_bridge.nbt", "tower_bridge.nbt", "nether_fortress_bridge.nbt"})
+
+
+class BridgeGeneratorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import structure_generators
+        import validate_templates
+        cls.g = structure_generators
+        cls.validate = staticmethod(validate_templates.validate)
+
+    def test_bridges_of_any_length_are_valid(self):
+        for style in self.g.BRIDGE_STYLES:
+            for length in (9, 23, 57, 120):
+                s = self.g.make_bridge(style, length)
+                self.assertEqual(s.length, max(length, 12 if style == "suspension" else 7), style)
+                errors, _, _ = self.validate(s)
+                self.assertEqual(errors, [], f"{style} {length}")
+
+    def test_bridge_between_banks_and_continuation(self):
+        first = self.g.bridge_between("stone", (100, 50), (130, 52), 64, 66, water_level=62)
+        info = first["bridge"]
+        self.assertEqual((info["axis"], info["deck"], info["center"]), ("x", 66, 51))
+        self.assertEqual((info["a"], info["b"]), (98, 132))
+        self.assertEqual(first["y_coord"], 66 - 4)
+        self.assertEqual(first["structure"].width, 35)
+        # a second bridge starting near the end continues the first one
+        second = self.g.bridge_between("wood", (134, 54), (150, 50), 70, 63, existing=[info])
+        self.assertTrue(second["snapped"])
+        self.assertEqual((second["bridge"]["a"], second["bridge"]["deck"], second["bridge"]["center"]), (133, 66, 51))
+        self.assertEqual(second["bridge"]["style"], "stone")
+        # deck stays above water
+        wet = self.g.bridge_between("wood", (0, 0), (0, 20), 60, 60, water_level=62)
+        self.assertEqual(wet["bridge"]["deck"], 63)
+
+
+class VillageGeneratorTests(unittest.TestCase):
+    class Terrain:
+        def height(self, x, z):
+            return None if x > 70 else 64 + max(0, x - 40) // 5
+
+        def is_water(self, x, z):
+            return (x + 20) ** 2 + (z - 15) ** 2 < 50
+
+    def test_village_layout(self):
+        import village_generator as vg
+        load = lambda n: Structure.load(os.path.join(TEMPLATES, f"{n}.nbt"))
+        result = vg.generate_village((0, 0), "medievale", "grande", self.Terrain(), load, seed=3)
+        self.assertGreaterEqual(len(result["placements"]), 10, result["report"])
+        terrain = self.Terrain()
+        occupied = {}
+        for p in result["placements"]:
+            s = p["structure"]
+            cells = [(x, z) for x in range(p["world_x"], p["world_x"] + s.width)
+                     for z in range(p["world_z"], p["world_z"] + s.length)]
+            for c in cells:
+                self.assertNotIn(c, occupied, f"{p['name']} sovrapposto a {occupied.get(c)}")
+                occupied[c] = p["name"]
+                self.assertIsNotNone(terrain.height(*c), "edificio fuori dal terreno generato")
+            heights = sorted(terrain.height(*c) for c in cells)
+            self.assertEqual(p["y_coord"], heights[len(heights) // 2] + 1)
+        self.assertFalse(any(c in occupied for c in result["path_cells"]), "strada sotto un edificio")
+        # every door opens towards a path
+        paths = set(result["path_cells"])
+        for p in result["placements"][1:]:
+            side, door = vg.front_side(p["structure"])
+            if door is None:
+                continue
+            dx, dz = vg.DIR[side]
+            x, z = p["world_x"] + door[0], p["world_z"] + door[1]
+            steps = 0
+            while (x, z) not in paths and steps < 20:
+                x, z, steps = x + dx, z + dz, steps + 1
+            self.assertLess(steps, 20, f"la porta di {p['name']} non porta a una strada")
+
+
+class ExtractorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        make_region(self.tmp, 0, 0, chunks=[(cx, cz) for cx in range(4) for cz in range(4)])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_cut_keeps_buildings_drops_terrain_and_trees(self):
+        from world_extractor import extract_area, save_structure
+        world = World(self.tmp)
+        cottage = Structure.load(os.path.join(TEMPLATES, "starter_cottage.nbt"))
+        inject_structures(world, [{"structure": cottage, "world_x": 10, "world_z": 10, "y_coord": GROUND_Y + 1,
+                                   "name": "c"}])
+        # a natural tree next to the house and a basement room under it
+        for y in range(GROUND_Y + 1, GROUND_Y + 5):
+            world.set_block(26, y, 12, state("oak_log", axis="y"))
+        for y in range(GROUND_Y + 5, GROUND_Y + 7):
+            world.set_block(26, y, 12, state("oak_leaves", distance="1", persistent="false", waterlogged="false"))
+        for y in range(GROUND_Y - 3, GROUND_Y + 1):
+            world.set_block(15, y, 15, state("stone_bricks") if y == GROUND_Y - 3 else state("air"))
+        world.save(backup=False)
+        world = World(self.tmp)
+        cut, info = extract_area(world, 8, 8, 28, 24)
+        names = {b["Name"] for b in cut.blocks.values()}
+        tree_column = [p for p in cut.blocks if (p[0], p[2]) == (26 - 8, 12 - 8)]
+        self.assertEqual(tree_column, [], "l'albero naturale non deve essere copiato")
+        self.assertIn("minecraft:oak_leaves", names)  # the cottage's hand-placed (persistent) bushes stay
+        self.assertNotIn("minecraft:grass_block", names)
+        self.assertNotIn("minecraft:dirt", names)
+        # cottage + the basement floor; the basement makes the cut go 4 layers below the ground
+        self.assertEqual(info["ground_offset"], 4)
+        self.assertEqual(info["blocks"], 424 + 1)
+        path = os.path.join(self.tmp, "cut.nbt")
+        save_structure(cut, path)
+        loaded = Structure.load(path)
+        self.assertEqual(loaded.ground_offset, 4)
+        self.assertEqual(len(loaded.blocks), len(cut.blocks))
+
+    def test_paths_follow_the_terrain(self):
+        from world_editor import paint_path
+        world = World(self.tmp)
+        world.set_block(5, GROUND_Y + 1, 5, state("poppy"))
+        n = paint_path(world, [(5, 5), (6, 5), (7, 5)])
+        self.assertEqual(n, 3)
+        self.assertEqual(str(world.get_block(5, GROUND_Y, 5)["Name"]), "minecraft:dirt_path")
+        self.assertEqual(str(world.get_block(5, GROUND_Y + 1, 5)["Name"]), "minecraft:air")
 
 
 if __name__ == "__main__":

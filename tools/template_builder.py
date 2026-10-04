@@ -545,6 +545,13 @@ class Builder:
         root["entities"] = TAG_List(10, [])
         return root
 
+    def to_structure(self):
+        """Finalized blocks as a structure_manager.Structure (no file round-trip)."""
+        from structure_manager import Structure
+        self.finalize()
+        blocks = {pos: {"Name": name, "Properties": dict(props)} for pos, (name, props) in self.cells.items()}
+        return Structure(self.w, self.h, self.l, blocks, DATA_VERSION)
+
     def save(self, path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         save_nbt(self.to_nbt(), "", path, compressed=True)

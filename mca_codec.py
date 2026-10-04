@@ -318,20 +318,66 @@ def block_key(b):
     return (name, prop_tuple)
 
 
+def normalize_state(entry):
+    """
+    Block state of any palette encoding as {Name, Properties?} (the 1.18-1.21 form).
+
+    Minecraft 26.x writes "minecraft:stone" for blocks without properties and
+    {id, properties} for the others; in lists mixing both, strings are wrapped as {"": ...}.
+    """
+    if isinstance(entry, str):
+        return TAG_Compound({"Name": TAG_String(str(entry))})
+    if "Name" in entry:
+        return entry
+    if len(entry) == 1 and "" in entry:
+        return normalize_state(entry[""])
+    if "id" in entry:
+        state = TAG_Compound({"Name": TAG_String(str(entry["id"]))})
+        props = entry.get("properties")
+        if props:
+            state["Properties"] = TAG_Compound({k: TAG_String(str(v)) for k, v in props.items()})
+        return state
+    return entry
+
+
+def is_new_state_encoding(palette):
+    """True if a palette uses the Minecraft 26.x encoding (strings / {id, properties})."""
+    return any(isinstance(e, str) or (hasattr(e, "keys") and "Name" not in e) for e in palette or ())
+
+
+def encode_palette(states, new_encoding):
+    """Palette list of normalized states in the encoding used by the chunk."""
+    if not new_encoding:
+        return TAG_List(10, states)
+    out = []
+    for s in states:
+        props = s.get("Properties")
+        if props:
+            out.append(TAG_Compound({"id": TAG_String(str(s["Name"])),
+                                     "properties": TAG_Compound({k: TAG_String(str(v)) for k, v in props.items()})}))
+        else:
+            out.append(TAG_String(str(s["Name"])))
+    if all(isinstance(o, str) for o in out):
+        return TAG_List(8, out)
+    return TAG_List(10, [o if hasattr(o, "keys") else TAG_Compound({"": o}) for o in out])
+
+
 def section_indices(section_nbt):
-    """Returns (palette_list, indices_list) for a section's block_states."""
+    """Returns (palette_list, indices_list) for a section's block_states (palette normalized)."""
     bs = section_nbt.get("block_states")
     if not bs or not bs.get("palette"):
         return [TAG_Compound({"Name": TAG_String("minecraft:air")})], [0] * 4096
-    palette = list(bs["palette"])
+    palette = [normalize_state(e) for e in bs["palette"]]
     data = bs.get("data")
     if not data or len(palette) == 1:
         return palette, [0] * 4096
     return palette, decode_indices(data, _palette_bits(len(palette)))
 
 
-def write_section_indices(section_nbt, palette, indices):
+def write_section_indices(section_nbt, palette, indices, new_encoding=None):
     """Stores palette + indices into the section, dropping unused palette entries."""
+    if new_encoding is None:
+        new_encoding = is_new_state_encoding((section_nbt.get("block_states") or {}).get("palette"))
     remap = {}
     new_palette = []
     for idx in indices:
@@ -341,7 +387,7 @@ def write_section_indices(section_nbt, palette, indices):
     if "block_states" not in section_nbt:
         section_nbt["block_states"] = TAG_Compound()
     bs = section_nbt["block_states"]
-    bs["palette"] = TAG_List(10, new_palette)
+    bs["palette"] = encode_palette(new_palette, new_encoding)
     if len(new_palette) <= 1:
         bs.pop("data", None)
         return
@@ -401,7 +447,7 @@ def surface_heights(chunk_nbt):
     for sec in secs:
         if remaining == 0:
             break
-        palette = sec["block_states"].get("palette", [])
+        palette = [normalize_state(e) for e in sec["block_states"].get("palette", [])]
         solid = {i for i, b in enumerate(palette) if b.get("Name", "minecraft:air") not in AIR_NAMES}
         if not solid:
             continue
@@ -470,6 +516,10 @@ class ChunkEditor:
         for sec in chunk_nbt.get("sections", []):
             if "block_states" in sec:
                 self._sections[int(sec.get("Y", 0))] = sec
+        # Minecraft 26.x encodes block states differently: keep the chunk's own encoding
+        self.new_encoding = any(is_new_state_encoding(s["block_states"].get("palette"))
+                                for s in self._sections.values())
+        self.data_version = int(chunk_nbt.get("DataVersion", 0) or 0)
         self._cache = {}       # sy -> [palette, indices, key->index]
         self._dirty_secs = set()
         self.changed = set()   # absolute (x, y, z) of changed blocks
@@ -522,7 +572,7 @@ class ChunkEditor:
         for sy in self._dirty_secs:
             palette, indices, _ = self._cache[sy]
             sec = self._sections[sy]
-            write_section_indices(sec, palette, indices)
+            write_section_indices(sec, palette, indices, self.new_encoding)
             # Stale light data: Minecraft recomputes it because isLightOn is reset below
             sec.pop("BlockLight", None)
             sec.pop("SkyLight", None)

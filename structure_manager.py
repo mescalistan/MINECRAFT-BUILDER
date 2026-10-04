@@ -12,6 +12,8 @@ class Structure:
         self.length = length    # Z
         self.blocks = blocks or {}  # Maps (x, y, z) -> {"Name": name, "Properties": props}
         self.data_version = data_version
+        # Layers of the structure below the original ground (cut areas with basements)
+        self.ground_offset = 0
 
     def modded_blocks(self):
         """Counts blocks that do not belong to the minecraft: namespace, per namespace."""
@@ -73,7 +75,12 @@ class Structure:
                 "Properties": rotated_props
             }
             
-        return Structure(new_w, new_h, new_l, new_blocks, self.data_version)
+        rotated = Structure(new_w, new_h, new_l, new_blocks, self.data_version)
+        rotated.ground_offset = self.ground_offset
+        for attr in ("bridge",):
+            if hasattr(self, attr):
+                setattr(rotated, attr, dict(getattr(self, attr)))
+        return rotated
 
     @classmethod
     def load(cls, file_path):
@@ -133,7 +140,10 @@ class Structure:
                 }
                 
         dv = tag.get("DataVersion")
-        return cls(w, h, l, blocks, int(dv) if dv is not None else None)
+        struct = cls(w, h, l, blocks, int(dv) if dv is not None else None)
+        meta = tag.get("MinecraftBuilder") or {}
+        struct.ground_offset = int(meta.get("groundOffset", 0))
+        return struct
 
     @classmethod
     def _load_schem(cls, file_path):

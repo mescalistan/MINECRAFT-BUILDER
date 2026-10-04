@@ -1,392 +1,392 @@
 [
  {
-  "file": "fountain_plaza.nbt",
-  "title": "Fountain Plaza",
-  "category": "Decoration",
-  "description": "Piazza con fontana a tre vasche, panchine, aiuole fiorite e lampioni."
- },
- {
-  "file": "market_stall.nbt",
-  "title": "Market Stall",
-  "category": "Decoration",
-  "description": "Bancarella con tendone a righe, bancone, barili e lanterna."
- },
- {
-  "file": "village_well.nbt",
-  "title": "Village Well",
-  "category": "Decoration",
-  "description": "Pozzo da villaggio con acqua, tettoia in pietra e lanterne."
- },
- {
-  "file": "zen_garden.nbt",
-  "title": "Zen Garden",
-  "category": "Decoration",
-  "description": "Giardino zen giapponese con ghiaia, laghetto con ninfee, ponticello, ciliegi in fiore, bambu' e lanterne di pietra."
- },
- {
-  "file": "fairytale_castle.nbt",
-  "title": "Fairytale Castle",
-  "category": "Fantasy",
-  "description": "Castello da fiaba ispirato a Neuschwanstein: mura bianche, torri con tetti conici blu, cortile e sale illuminate."
+  "file": "blacksmith_forge.nbt",
+  "title": "Blacksmith Forge",
+  "category": "Case",
+  "description": "Fucina aperta con altoforno, incudine, banco da forgiatura e camino fumante."
  },
  {
   "file": "hobbit_hole.nbt",
   "title": "Hobbit Hole",
-  "category": "Fantasy",
+  "category": "Case",
   "description": "Casa hobbit scavata in una collina erbosa: porta rotonda, finestre tonde, camere, cucina e giardino fiorito."
  },
  {
-  "file": "pirate_ship.nbt",
-  "title": "Pirate Ship",
-  "category": "Fantasy",
-  "description": "Galeone pirata con scafo in quercia scura, due alberi con vele, coffa, cabina del capitano, cannoni e stiva."
+  "file": "igloo.nbt",
+  "title": "Igloo",
+  "category": "Case",
+  "description": "Igloo di neve con tunnel d'ingresso, letto, fornace, banco da lavoro e tappeti."
  },
  {
-  "file": "treehouse.nbt",
-  "title": "Treehouse",
-  "category": "Fantasy",
-  "description": "Casa sull'albero: grande quercia scura, piattaforma con capanna, ringhiera, scala a pioli e chioma folta."
- },
- {
-  "file": "wizard_tower.nbt",
-  "title": "Wizard Tower",
-  "category": "Fantasy",
-  "description": "Torre del mago in ardesia con tetto conico di ametista, biblioteca con tavolo da incantamento, alchimia e alloggio."
- },
- {
-  "file": "animal_pen.nbt",
-  "title": "Animal Pen",
-  "category": "Farm",
-  "description": "Recinto per animali con riparo, fieno, compostiera e abbeveratoi."
- },
- {
-  "file": "crop_farm.nbt",
-  "title": "Crop Farm (Mixed)",
-  "category": "Farm",
-  "description": "Campo idratato con grano, carote, patate e barbabietole, recintato."
- },
- {
-  "file": "greenhouse.nbt",
-  "title": "Greenhouse",
-  "category": "Farm",
-  "description": "Serra in vetro con struttura in quercia: aiuole coltivate e irrigate, fiori, compostiera e banco."
- },
- {
-  "file": "horse_stable.nbt",
-  "title": "Horse Stable",
-  "category": "Farm",
-  "description": "Scuderia in abete con sei box, cancelli, fieno, abbeveratoi, cassa per selle e tetto a capanna."
- },
- {
-  "file": "sugar_cane_farm.nbt",
-  "title": "Sugar Cane Farm",
-  "category": "Farm",
-  "description": "Piantagione di canna da zucchero: file di sabbia irrigate, recinto con cancello e lampioni."
- },
- {
-  "file": "blacksmith_forge.nbt",
-  "title": "Blacksmith Forge",
-  "category": "House",
-  "description": "Fucina aperta con altoforno, incudine, banco da forgiatura e camino fumante."
+  "file": "medieval_tavern.nbt",
+  "title": "Medieval Tavern",
+  "category": "Case",
+  "description": "Taverna su due piani: bancone, botti, tavoli, focolare con camino e stanze per gli ospiti al piano di sopra."
  },
  {
   "file": "modern_villa.nbt",
   "title": "Modern Villa",
-  "category": "House",
+  "category": "Case",
   "description": "Villa moderna in cemento bianco e vetro: volume superiore a sbalzo, terrazza, piscina, scala interna e giardino."
  },
  {
-  "file": "skyscraper.nbt",
-  "title": "Skyscraper",
-  "category": "House",
-  "description": "Grattacielo di 15 piani con facciata in vetro, atrio, uffici illuminati, scala a pioli nel nucleo ed eliporto."
+  "file": "plains_village_house.nbt",
+  "title": "Plains Village House",
+  "category": "Case",
+  "description": "Casa del villaggio delle pianure: fondamenta in pietrisco, travi di quercia, fioriere e arredamento."
  },
  {
   "file": "starter_cottage.nbt",
   "title": "Starter Cottage",
-  "category": "House",
+  "category": "Case",
   "description": "Casetta 9x9 in quercia con tetto a capanna, letto, forno, cassa e illuminazione."
+ },
+ {
+  "file": "treehouse.nbt",
+  "title": "Treehouse",
+  "category": "Case",
+  "description": "Casa sull'albero: grande quercia scura, piattaforma con capanna, ringhiera, scala a pioli e chioma folta."
  },
  {
   "file": "tudor_house.nbt",
   "title": "Tudor House",
-  "category": "House",
+  "category": "Case",
   "description": "Casa Tudor a graticcio con piano superiore sporgente, tetto ripido, camino e due piani arredati."
  },
  {
-  "file": "arc_de_triomphe.nbt",
-  "title": "Arc de Triomphe",
-  "category": "Landmark",
-  "description": "Arco di Trionfo di Parigi con fornice principale, archi laterali, rilievi e terrazza panoramica."
+  "file": "viking_longhouse.nbt",
+  "title": "Viking Longhouse",
+  "category": "Case",
+  "description": "Casa lunga vichinga a forma di scafo con focolare centrale, panche, letti e teste di drago sul tetto."
  },
  {
-  "file": "big_ben.nbt",
-  "title": "Big Ben (Elizabeth Tower)",
-  "category": "Landmark",
-  "description": "Torre dell'orologio di Londra con quadranti, cella campanaria, guglia e scala interna."
- },
- {
-  "file": "colosseum.nbt",
-  "title": "Colosseum",
-  "category": "Landmark",
-  "description": "Colosseo di Roma: anello ellittico a quattro ordini di arcate, gradinate, arena e un lato in rovina."
- },
- {
-  "file": "dutch_windmill.nbt",
-  "title": "Dutch Windmill",
-  "category": "Landmark",
-  "description": "Mulino a vento olandese di Kinderdijk: base ottagonale in mattoni, ballatoio, cappello e pale in tela."
- },
- {
-  "file": "eiffel_tower.nbt",
-  "title": "Eiffel Tower",
-  "category": "Landmark",
-  "description": "Torre Eiffel in scala: quattro gambe ad arco, due piattaforme panoramiche e scala a pioli centrale."
- },
- {
-  "file": "el_castillo.nbt",
-  "title": "El Castillo (Chichen Itza)",
-  "category": "Landmark",
-  "description": "Piramide maya di Kukulkan: nove terrazze, scalinate sui quattro lati e tempio sulla cima."
- },
- {
-  "file": "five_storey_pagoda.nbt",
-  "title": "Five-Storey Pagoda",
-  "category": "Landmark",
-  "description": "Pagoda giapponese a cinque piani con gronde ricurve, pilastro centrale e guglia sorin."
- },
- {
-  "file": "gothic_cathedral.nbt",
-  "title": "Gothic Cathedral",
-  "category": "Landmark",
-  "description": "Cattedrale gotica ispirata a Notre-Dame: navata alta, archi rampanti, rosone, vetrate colorate e due torri."
- },
- {
-  "file": "great_pyramid.nbt",
-  "title": "Great Pyramid of Giza",
-  "category": "Landmark",
-  "description": "Grande Piramide con facce lisce, corridoio d'ingresso illuminato e camera del re con il tesoro."
- },
- {
-  "file": "great_wall.nbt",
-  "title": "Great Wall Segment",
-  "category": "Landmark",
-  "description": "Tratto della Grande Muraglia cinese con camminamento merlato e torre di guardia abitabile."
- },
- {
-  "file": "leaning_tower_pisa.nbt",
-  "title": "Leaning Tower of Pisa",
-  "category": "Landmark",
-  "description": "Torre di Pisa pendente in marmo con logge a colonne, cella campanaria e scala interna."
- },
- {
-  "file": "moai_heads.nbt",
-  "title": "Moai of Easter Island",
-  "category": "Landmark",
-  "description": "Tre statue Moai dell'Isola di Pasqua su un ahu di pietra, una con il pukao rosso."
- },
- {
-  "file": "obelisk.nbt",
-  "title": "Obelisk",
-  "category": "Landmark",
-  "description": "Obelisco in marmo bianco in stile Washington Monument, su piazza a gradini con lanterne."
- },
- {
-  "file": "onion_dome_cathedral.nbt",
-  "title": "Onion Dome Cathedral",
-  "category": "Landmark",
-  "description": "Cattedrale a cupole a cipolla ispirata a San Basilio: torre centrale a tenda e cappelle con cupole colorate a strisce."
- },
- {
-  "file": "pantheon.nbt",
-  "title": "Pantheon",
-  "category": "Landmark",
-  "description": "Pantheon di Roma: rotonda con cupola e oculo, pavimento a scacchi e pronao a colonne con frontone."
- },
- {
-  "file": "parthenon.nbt",
-  "title": "Parthenon",
-  "category": "Landmark",
-  "description": "Partenone di Atene: stilobate a gradini, peristilio di colonne doriche, frontoni e cella con statua."
- },
- {
-  "file": "space_needle.nbt",
-  "title": "Space Needle",
-  "category": "Landmark",
-  "description": "Torre panoramica ispirata allo Space Needle di Seattle: gambe a clessidra, disco ristorante vetrato e guglia."
- },
- {
-  "file": "stonehenge.nbt",
-  "title": "Stonehenge",
-  "category": "Landmark",
-  "description": "Cerchio megalitico di Stonehenge con architravi, triliti interni, pietre cadute e altare."
- },
- {
-  "file": "suspension_bridge.nbt",
-  "title": "Suspension Bridge",
-  "category": "Landmark",
-  "description": "Ponte sospeso rosso ispirato al Golden Gate: due torri con traversi, cavi parabolici, tiranti e carreggiata."
- },
- {
-  "file": "taj_mahal.nbt",
-  "title": "Taj Mahal",
-  "category": "Landmark",
-  "description": "Taj Mahal in marmo bianco: piattaforma, iwan ad arco, cupola a cipolla, quattro minareti e vasca riflettente."
- },
- {
-  "file": "temple_of_heaven.nbt",
-  "title": "Temple of Heaven",
-  "category": "Landmark",
-  "description": "Tempio del Cielo di Pechino: tre terrazze di marmo con balaustre, sala rotonda rossa e tre tetti blu con pinnacolo d'oro."
- },
- {
-  "file": "torii_gate.nbt",
-  "title": "Torii Gate",
-  "category": "Landmark",
-  "description": "Portale torii rosso in stile Itsukushima con architrave nera ricurva e lanterne di pietra."
- },
- {
-  "file": "tower_bridge.nbt",
-  "title": "Tower Bridge",
-  "category": "Landmark",
-  "description": "Tower Bridge di Londra: due torri gotiche, passerelle alte vetrate, catene blu e carreggiata."
+  "file": "witch_hut.nbt",
+  "title": "Witch Hut",
+  "category": "Case",
+  "description": "Capanna della strega su palafitte in abete con calderone, vaso con fungo e scala d'accesso."
  },
  {
   "file": "castle_gatehouse.nbt",
   "title": "Castle Gatehouse",
-  "category": "Medieval",
+  "category": "Castelli e fortezze",
   "description": "Corpo di guardia con saracinesca, due torri cilindriche, ponte levatoio e camminamento merlato."
  },
  {
   "file": "castle_keep.nbt",
   "title": "Castle Keep",
-  "category": "Medieval",
+  "category": "Castelli e fortezze",
   "description": "Mastio normanno a quattro piani con torrette angolari, sala del trono, camere, armeria e camminamento."
  },
  {
-  "file": "medieval_tavern.nbt",
-  "title": "Medieval Tavern",
-  "category": "Medieval",
-  "description": "Taverna su due piani: bancone, botti, tavoli, focolare con camino e stanze per gli ospiti al piano di sopra."
+  "file": "fairytale_castle.nbt",
+  "title": "Fairytale Castle",
+  "category": "Castelli e fortezze",
+  "description": "Castello da fiaba ispirato a Neuschwanstein: mura bianche, torri con tetti conici blu, cortile e sale illuminate."
  },
  {
-  "file": "watchtower.nbt",
-  "title": "Medieval Watchtower",
-  "category": "Medieval",
-  "description": "Torre di guardia 7x7 alta 16 blocchi con scala a pioli, piano intermedio e merli."
- },
- {
-  "file": "viking_longhouse.nbt",
-  "title": "Viking Longhouse",
-  "category": "Medieval",
-  "description": "Casa lunga vichinga a forma di scafo con focolare centrale, panche, letti e teste di drago sul tetto."
- },
- {
-  "file": "village_chapel.nbt",
-  "title": "Village Chapel",
-  "category": "Medieval",
-  "description": "Cappella di villaggio con campanile, campana, panche, altare con candele e vetrate."
- },
- {
-  "file": "ancient_city_portal.nbt",
-  "title": "Ancient City Portal",
-  "category": "Minecraft Classic",
-  "description": "Il grande portale della citta' antica in ardesia rinforzata, con sculk, lanterne dell'anima e casse."
- },
- {
-  "file": "desert_temple.nbt",
-  "title": "Desert Temple",
-  "category": "Minecraft Classic",
-  "description": "Tempio del deserto con torri decorate in terracotta, sala centrale a mosaico e quattro casse del tesoro."
- },
- {
-  "file": "desert_well.nbt",
-  "title": "Desert Well",
-  "category": "Minecraft Classic",
-  "description": "Il classico pozzo del deserto in arenaria con acqua al centro e tettoia su quattro pilastri."
- },
- {
-  "file": "end_city_tower.nbt",
-  "title": "End City Tower",
-  "category": "Minecraft Classic",
-  "description": "Torre della citta' dell'End in purpur, con stanze sporgenti, verghe dell'End e vetrate magenta."
- },
- {
-  "file": "igloo.nbt",
-  "title": "Igloo",
-  "category": "Minecraft Classic",
-  "description": "Igloo di neve con tunnel d'ingresso, letto, fornace, banco da lavoro e tappeti."
- },
- {
-  "file": "jungle_temple.nbt",
-  "title": "Jungle Temple",
-  "category": "Minecraft Classic",
-  "description": "Tempio della giungla in pietrisco muschioso su due livelli, con viticci, scalinata e cassa."
- },
- {
-  "file": "nether_fortress_bridge.nbt",
-  "title": "Nether Fortress Bridge",
-  "category": "Minecraft Classic",
-  "description": "Ponte della fortezza del Nether in mattoni infernali con archi, ringhiere e giardino di verruche."
+  "file": "great_wall.nbt",
+  "title": "Great Wall Segment",
+  "category": "Castelli e fortezze",
+  "description": "Tratto della Grande Muraglia cinese con camminamento merlato e torre di guardia abitabile."
  },
  {
   "file": "pillager_outpost.nbt",
   "title": "Pillager Outpost",
-  "category": "Minecraft Classic",
+  "category": "Castelli e fortezze",
   "description": "Avamposto dei predoni in quercia scura e betulla, con piani collegati da scale e terrazza di vedetta."
  },
  {
-  "file": "plains_village_house.nbt",
-  "title": "Plains Village House",
-  "category": "Minecraft Classic",
-  "description": "Casa del villaggio delle pianure: fondamenta in pietrisco, travi di quercia, fioriere e arredamento."
+  "file": "animal_pen.nbt",
+  "title": "Animal Pen",
+  "category": "Fattorie e animali",
+  "description": "Recinto per animali con riparo, fieno, compostiera e abbeveratoi."
+ },
+ {
+  "file": "crop_farm.nbt",
+  "title": "Crop Farm (Mixed)",
+  "category": "Fattorie e animali",
+  "description": "Campo idratato con grano, carote, patate e barbabietole, recintato."
+ },
+ {
+  "file": "greenhouse.nbt",
+  "title": "Greenhouse",
+  "category": "Fattorie e animali",
+  "description": "Serra in vetro con struttura in quercia: aiuole coltivate e irrigate, fiori, compostiera e banco."
+ },
+ {
+  "file": "horse_stable.nbt",
+  "title": "Horse Stable",
+  "category": "Fattorie e animali",
+  "description": "Scuderia in abete con sei box, cancelli, fieno, abbeveratoi, cassa per selle e tetto a capanna."
+ },
+ {
+  "file": "sugar_cane_farm.nbt",
+  "title": "Sugar Cane Farm",
+  "category": "Fattorie e animali",
+  "description": "Piantagione di canna da zucchero: file di sabbia irrigate, recinto con cancello e lampioni."
+ },
+ {
+  "file": "arc_de_triomphe.nbt",
+  "title": "Arc de Triomphe",
+  "category": "Monumenti",
+  "description": "Arco di Trionfo di Parigi con fornice principale, archi laterali, rilievi e terrazza panoramica."
+ },
+ {
+  "file": "colosseum.nbt",
+  "title": "Colosseum",
+  "category": "Monumenti",
+  "description": "Colosseo di Roma: anello ellittico a quattro ordini di arcate, gradinate, arena e un lato in rovina."
+ },
+ {
+  "file": "dutch_windmill.nbt",
+  "title": "Dutch Windmill",
+  "category": "Monumenti",
+  "description": "Mulino a vento olandese di Kinderdijk: base ottagonale in mattoni, ballatoio, cappello e pale in tela."
+ },
+ {
+  "file": "great_pyramid.nbt",
+  "title": "Great Pyramid of Giza",
+  "category": "Monumenti",
+  "description": "Grande Piramide con facce lisce, corridoio d'ingresso illuminato e camera del re con il tesoro."
+ },
+ {
+  "file": "moai_heads.nbt",
+  "title": "Moai of Easter Island",
+  "category": "Monumenti",
+  "description": "Tre statue Moai dell'Isola di Pasqua su un ahu di pietra, una con il pukao rosso."
+ },
+ {
+  "file": "stonehenge.nbt",
+  "title": "Stonehenge",
+  "category": "Monumenti",
+  "description": "Cerchio megalitico di Stonehenge con architravi, triliti interni, pietre cadute e altare."
+ },
+ {
+  "file": "taj_mahal.nbt",
+  "title": "Taj Mahal",
+  "category": "Monumenti",
+  "description": "Taj Mahal in marmo bianco: piattaforma, iwan ad arco, cupola a cipolla, quattro minareti e vasca riflettente."
+ },
+ {
+  "file": "pirate_ship.nbt",
+  "title": "Pirate Ship",
+  "category": "Navi",
+  "description": "Galeone pirata con scafo in quercia scura, due alberi con vele, coffa, cabina del capitano, cannoni e stiva."
+ },
+ {
+  "file": "desert_well.nbt",
+  "title": "Desert Well",
+  "category": "Piazze e decorazioni",
+  "description": "Il classico pozzo del deserto in arenaria con acqua al centro e tettoia su quattro pilastri."
+ },
+ {
+  "file": "fountain_plaza.nbt",
+  "title": "Fountain Plaza",
+  "category": "Piazze e decorazioni",
+  "description": "Piazza con fontana a tre vasche, panchine, aiuole fiorite e lampioni."
+ },
+ {
+  "file": "market_stall.nbt",
+  "title": "Market Stall",
+  "category": "Piazze e decorazioni",
+  "description": "Bancarella con tendone a righe, bancone, barili e lanterna."
+ },
+ {
+  "file": "village_well.nbt",
+  "title": "Village Well",
+  "category": "Piazze e decorazioni",
+  "description": "Pozzo da villaggio con acqua, tettoia in pietra e lanterne."
+ },
+ {
+  "file": "zen_garden.nbt",
+  "title": "Zen Garden",
+  "category": "Piazze e decorazioni",
+  "description": "Giardino zen giapponese con ghiaia, laghetto con ninfee, ponticello, ciliegi in fiore, bambu' e lanterne di pietra."
+ },
+ {
+  "file": "nether_fortress_bridge.nbt",
+  "title": "Nether Fortress Bridge",
+  "category": "Ponti",
+  "description": "Ponte della fortezza del Nether in mattoni infernali con archi, ringhiere e giardino di verruche."
+ },
+ {
+  "file": "stone_bridge.nbt",
+  "title": "Stone Bridge",
+  "category": "Ponti",
+  "description": "Ponte in pietra 5x25 a tre pile con archi, parapetti e lanterne."
+ },
+ {
+  "file": "suspension_bridge.nbt",
+  "title": "Suspension Bridge",
+  "category": "Ponti",
+  "description": "Ponte sospeso rosso ispirato al Golden Gate: due torri con traversi, cavi parabolici, tiranti e carreggiata."
+ },
+ {
+  "file": "tower_bridge.nbt",
+  "title": "Tower Bridge",
+  "category": "Ponti",
+  "description": "Tower Bridge di Londra: due torri gotiche, passerelle alte vetrate, catene blu e carreggiata."
+ },
+ {
+  "file": "ancient_city_portal.nbt",
+  "title": "Ancient City Portal",
+  "category": "Rovine e portali",
+  "description": "Il grande portale della citta' antica in ardesia rinforzata, con sculk, lanterne dell'anima e casse."
  },
  {
   "file": "ruined_portal.nbt",
   "title": "Ruined Portal",
-  "category": "Minecraft Classic",
+  "category": "Rovine e portali",
   "description": "Portale in rovina con cornice di ossidiana spezzata, netherrack, magma, oro e cassa del bottino."
  },
  {
-  "file": "witch_hut.nbt",
-  "title": "Witch Hut",
-  "category": "Minecraft Classic",
-  "description": "Capanna della strega su palafitte in abete con calderone, vaso con fungo e scala d'accesso."
+  "file": "desert_temple.nbt",
+  "title": "Desert Temple",
+  "category": "Templi e luoghi sacri",
+  "description": "Tempio del deserto con torri decorate in terracotta, sala centrale a mosaico e quattro casse del tesoro."
+ },
+ {
+  "file": "el_castillo.nbt",
+  "title": "El Castillo (Chichen Itza)",
+  "category": "Templi e luoghi sacri",
+  "description": "Piramide maya di Kukulkan: nove terrazze, scalinate sui quattro lati e tempio sulla cima."
+ },
+ {
+  "file": "five_storey_pagoda.nbt",
+  "title": "Five-Storey Pagoda",
+  "category": "Templi e luoghi sacri",
+  "description": "Pagoda giapponese a cinque piani con gronde ricurve, pilastro centrale e guglia sorin."
+ },
+ {
+  "file": "gothic_cathedral.nbt",
+  "title": "Gothic Cathedral",
+  "category": "Templi e luoghi sacri",
+  "description": "Cattedrale gotica ispirata a Notre-Dame: navata alta, archi rampanti, rosone, vetrate colorate e due torri."
+ },
+ {
+  "file": "jungle_temple.nbt",
+  "title": "Jungle Temple",
+  "category": "Templi e luoghi sacri",
+  "description": "Tempio della giungla in pietrisco muschioso su due livelli, con viticci, scalinata e cassa."
+ },
+ {
+  "file": "onion_dome_cathedral.nbt",
+  "title": "Onion Dome Cathedral",
+  "category": "Templi e luoghi sacri",
+  "description": "Cattedrale a cupole a cipolla ispirata a San Basilio: torre centrale a tenda e cappelle con cupole colorate a strisce."
+ },
+ {
+  "file": "pantheon.nbt",
+  "title": "Pantheon",
+  "category": "Templi e luoghi sacri",
+  "description": "Pantheon di Roma: rotonda con cupola e oculo, pavimento a scacchi e pronao a colonne con frontone."
+ },
+ {
+  "file": "parthenon.nbt",
+  "title": "Parthenon",
+  "category": "Templi e luoghi sacri",
+  "description": "Partenone di Atene: stilobate a gradini, peristilio di colonne doriche, frontoni e cella con statua."
+ },
+ {
+  "file": "temple_of_heaven.nbt",
+  "title": "Temple of Heaven",
+  "category": "Templi e luoghi sacri",
+  "description": "Tempio del Cielo di Pechino: tre terrazze di marmo con balaustre, sala rotonda rossa e tre tetti blu con pinnacolo d'oro."
+ },
+ {
+  "file": "torii_gate.nbt",
+  "title": "Torii Gate",
+  "category": "Templi e luoghi sacri",
+  "description": "Portale torii rosso in stile Itsukushima con architrave nera ricurva e lanterne di pietra."
+ },
+ {
+  "file": "village_chapel.nbt",
+  "title": "Village Chapel",
+  "category": "Templi e luoghi sacri",
+  "description": "Cappella di villaggio con campanile, campana, panche, altare con candele e vetrate."
+ },
+ {
+  "file": "big_ben.nbt",
+  "title": "Big Ben (Elizabeth Tower)",
+  "category": "Torri",
+  "description": "Torre dell'orologio di Londra con quadranti, cella campanaria, guglia e scala interna."
+ },
+ {
+  "file": "eiffel_tower.nbt",
+  "title": "Eiffel Tower",
+  "category": "Torri",
+  "description": "Torre Eiffel in scala: quattro gambe ad arco, due piattaforme panoramiche e scala a pioli centrale."
+ },
+ {
+  "file": "end_city_tower.nbt",
+  "title": "End City Tower",
+  "category": "Torri",
+  "description": "Torre della citta' dell'End in purpur, con stanze sporgenti, verghe dell'End e vetrate magenta."
+ },
+ {
+  "file": "leaning_tower_pisa.nbt",
+  "title": "Leaning Tower of Pisa",
+  "category": "Torri",
+  "description": "Torre di Pisa pendente in marmo con logge a colonne, cella campanaria e scala interna."
+ },
+ {
+  "file": "lighthouse.nbt",
+  "title": "Lighthouse",
+  "category": "Torri",
+  "description": "Faro a strisce bianche e rosse con galleria panoramica e lanterna in vetro."
+ },
+ {
+  "file": "watchtower.nbt",
+  "title": "Medieval Watchtower",
+  "category": "Torri",
+  "description": "Torre di guardia 7x7 alta 16 blocchi con scala a pioli, piano intermedio e merli."
+ },
+ {
+  "file": "obelisk.nbt",
+  "title": "Obelisk",
+  "category": "Torri",
+  "description": "Obelisco in marmo bianco in stile Washington Monument, su piazza a gradini con lanterne."
+ },
+ {
+  "file": "skyscraper.nbt",
+  "title": "Skyscraper",
+  "category": "Torri",
+  "description": "Grattacielo di 15 piani con facciata in vetro, atrio, uffici illuminati, scala a pioli nel nucleo ed eliporto."
+ },
+ {
+  "file": "space_needle.nbt",
+  "title": "Space Needle",
+  "category": "Torri",
+  "description": "Torre panoramica ispirata allo Space Needle di Seattle: gambe a clessidra, disco ristorante vetrato e guglia."
+ },
+ {
+  "file": "wizard_tower.nbt",
+  "title": "Wizard Tower",
+  "category": "Torri",
+  "description": "Torre del mago in ardesia con tetto conico di ametista, biblioteca con tavolo da incantamento, alchimia e alloggio."
  },
  {
   "file": "beacon_pyramid.nbt",
   "title": "Beacon Pyramid",
-  "category": "Utility",
+  "category": "Utilità e magia",
   "description": "Piramide completa a quattro livelli in ferro e oro con faro attivo sulla cima."
  },
  {
   "file": "enchanting_room.nbt",
   "title": "Enchanting Room",
-  "category": "Utility",
+  "category": "Utilità e magia",
   "description": "Stanza dell'incantamento al livello massimo (15 librerie), con leggio, incudine, cassa e tappeto."
- },
- {
-  "file": "lighthouse.nbt",
-  "title": "Lighthouse",
-  "category": "Utility",
-  "description": "Faro a strisce bianche e rosse con galleria panoramica e lanterna in vetro."
  },
  {
   "file": "nether_portal_shrine.nbt",
   "title": "Nether Portal Shrine",
-  "category": "Utility",
+  "category": "Utilità e magia",
   "description": "Portale del Nether gia' acceso su piattaforma in pietranera con lanterne dell'anima."
- },
- {
-  "file": "stone_bridge.nbt",
-  "title": "Stone Bridge",
-  "category": "Utility",
-  "description": "Ponte in pietra 5x25 a tre pile con archi, parapetti e lanterne."
  },
  {
   "file": "villager_trading_hall.nbt",
   "title": "Villager Trading Hall",
-  "category": "Utility",
+  "category": "Utilità e magia",
   "description": "Sala degli scambi con 20 celle per villici, ognuna con il proprio blocco professione (porta i tuoi villici)."
  }
 ]

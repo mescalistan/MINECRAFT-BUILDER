@@ -6,7 +6,7 @@ import os
 
 from nbt_codec import TAG_Compound, TAG_String
 from mca_codec import (
-    MCARegion, ChunkEditor, AIR_NAMES, block_key, chunk_is_full,
+    MCARegion, ChunkEditor, AIR_NAMES, block_key, chunk_is_full, read_world_surface,
     chunk_format_supported,
 )
 
@@ -19,6 +19,10 @@ _NON_GROUND_HINTS = (
     "sapling", "bush", "vine", "torch", "snow", "seagrass", "kelp", "sugar_cane",
     "mushroom", "sweet_berry", "dripleaf", "azalea", "moss_carpet", "carpet",
 )
+
+
+MAX_FOUNDATION_GAP = 10   # blocks of empty space filled under a structure
+MAX_PILLAR_DEPTH = 96     # bridge piers / towers reach the ground up to this depth
 
 
 def is_ground(name):
@@ -53,6 +57,25 @@ def surface_fill_blocks(surface_block_name):
     if any(k in s_name for k in ("stone", "deepslate", "andesite", "diorite", "granite", "tuff", "calcite")):
         return "minecraft:stone", "minecraft:stone"
     return "minecraft:grass_block", "minecraft:dirt"
+
+
+# Block renames between versions: (first DataVersion with the new name, old name, new name).
+# Chunks are written without DataFixer, so a structure saved with an older name must use the
+# name the target world knows, otherwise the game drops the whole 16x16x16 section.
+BLOCK_RENAMES = [
+    (2724, "minecraft:grass_path", "minecraft:dirt_path"),     # 1.17
+    (3679, "minecraft:grass", "minecraft:short_grass"),        # 1.20.3
+    (4536, "minecraft:chain", "minecraft:iron_chain"),         # 1.21.9
+]
+
+
+def upgrade_block(block, target_version):
+    """Block dict with its name updated for the target world's DataVersion."""
+    name = block.get("Name", "")
+    for version, old, new in BLOCK_RENAMES:
+        if name == old and target_version >= version:
+            return dict(block, Name=new)
+    return block
 
 
 def to_state(block):
@@ -105,6 +128,13 @@ class World:
         self._editors[key] = editor
         return editor
 
+    def get_block(self, x, y, z):
+        """Block state compound at (x, y, z), or None if the chunk is not editable/loaded."""
+        editor = self.editor(x >> 4, z >> 4)
+        if editor is None:
+            return None
+        return editor.get_block(x & 15, y, z & 15)
+
     def get_block_name(self, x, y, z):
         editor = self.editor(x >> 4, z >> 4)
         if editor is None:
@@ -117,6 +147,17 @@ class World:
         if editor is None:
             return False
         return editor.set_block(x & 15, y, z & 15, state, key)
+
+    def surface_y(self, x, z):
+        """Y of the topmost block of a column from the chunk heightmap, or None."""
+        editor = self.editor(x >> 4, z >> 4)
+        if editor is None:
+            return None
+        if not hasattr(editor, "_surface"):
+            editor._surface = read_world_surface(editor.nbt)
+        if not editor._surface:
+            return None
+        return editor._surface[((z & 15) << 4) | (x & 15)]
 
     def ground_y(self, x, z, start_y, max_depth=96):
         """Y of the first ground block at or below start_y, or None."""
@@ -158,6 +199,35 @@ class World:
         return backups
 
 
+class WorldTerrain:
+    """Terrain queries for the village generator: ground height and water, cached per column."""
+
+    def __init__(self, world):
+        self.world = world
+        self._cache = {}
+
+    def _column(self, x, z):
+        key = (x, z)
+        if key not in self._cache:
+            top = self.world.surface_y(x, z)
+            if top is None:
+                self._cache[key] = (None, False)
+            else:
+                name = self.world.get_block_name(x, top, z) or ""
+                if "water" in name or "lava" in name:
+                    self._cache[key] = (top, True)
+                else:
+                    ground = self.world.ground_y(x, z, top)
+                    self._cache[key] = (ground if ground is not None else top, False)
+        return self._cache[key]
+
+    def height(self, x, z):
+        return self._column(x, z)[0]
+
+    def is_water(self, x, z):
+        return self._column(x, z)[1]
+
+
 def inject_structures(world, placements, fill_foundations=True, clear_terrain=True,
                       skip_modded=True, log=None):
     """
@@ -169,7 +239,11 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
     stats = {"placed": 0, "cleared": 0, "foundation": 0, "skipped_missing": 0,
              "skipped_modded": 0, "skipped_height": 0}
 
+    stats["path"] = 0
     for item in placements:
+        if item.get("kind") == "path":
+            stats["path"] += paint_path(world, item.get("cells", ()), item.get("block", "minecraft:dirt_path"))
+            continue
         struct = item["structure"]
         ox, oy, oz = item["world_x"], item["y_coord"], item["world_z"]
         log(f"Iniezione {item['name']} a X: {ox}, Y: {oy}, Z: {oz}...")
@@ -195,8 +269,23 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                 ground = world.ground_y(gx, gz, base_y - 1)
                 if ground is None or ground >= base_y - 1:
                     continue
-                surface = world.get_block_name(gx, ground, gz) or "minecraft:grass_block"
-                foundation_cols.append((gx, gz, ground, base_y, surface_fill_blocks(surface)))
+                pillars = item.get("extend_columns")
+                # A big gap means the structure floats on purpose (sky builds, high placements):
+                # only small gaps are filled. Structures resting on water (boats, docks) are not
+                # propped up either; bridge piers always go down to the bottom.
+                if base_y - 1 - ground > (MAX_PILLAR_DEPTH if pillars else MAX_FOUNDATION_GAP):
+                    continue
+                below = world.get_block_name(gx, base_y - 1, gz) or ""
+                if not pillars and ("water" in below or "lava" in below):
+                    continue
+                if pillars:
+                    # Bridges and towers: the pillar itself continues down to the ground
+                    bottom = struct.blocks[(bx, by, bz)]
+                    fill = (bottom, bottom)
+                else:
+                    surface = world.get_block_name(gx, ground, gz) or "minecraft:grass_block"
+                    fill = tuple({"Name": n} for n in surface_fill_blocks(surface))
+                foundation_cols.append((gx, gz, ground, base_y, fill))
 
         state_cache = {}
         for (bx, by, bz), block in struct.blocks.items():
@@ -214,22 +303,54 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
             if skip_modded and not name.startswith("minecraft:"):
                 stats["skipped_modded"] += 1
                 continue
-            bk = block_key(block)
-            state = state_cache.get(bk)
-            if state is None:
-                state = state_cache[bk] = to_state(block)
-            if world.editor(gx >> 4, gz >> 4) is None:
+            editor = world.editor(gx >> 4, gz >> 4)
+            version = editor.data_version if editor is not None else 0
+            bk = (block_key(block), version)
+            cached = state_cache.get(bk)
+            if cached is None:
+                state = to_state(upgrade_block(block, version))
+                cached = state_cache[bk] = (state, block_key(state))
+            state, state_key = cached
+            if editor is None:
                 stats["skipped_missing"] += 1
-            elif world.set_block(gx, gy, gz, state, bk):
+            elif world.set_block(gx, gy, gz, state, state_key):
                 stats["placed"] += 1
             else:
                 stats["skipped_height"] += 1
 
-        for gx, gz, ground, base_y, (surf_name, sub_name) in foundation_cols:
-            surf = TAG_Compound({"Name": TAG_String(surf_name)})
-            sub = TAG_Compound({"Name": TAG_String(sub_name)})
+        for gx, gz, ground, base_y, (surf_block, sub_block) in foundation_cols:
+            surf, sub = to_state(surf_block), to_state(sub_block)
             for y in range(ground + 1, base_y):
                 if world.set_block(gx, y, gz, surf if y == base_y - 1 else sub):
                     stats["foundation"] += 1
 
     return stats
+
+
+_PATH_ON = {
+    "minecraft:sand": "minecraft:smooth_sandstone", "minecraft:red_sand": "minecraft:smooth_red_sandstone",
+    "minecraft:stone": "minecraft:gravel", "minecraft:snow_block": "minecraft:packed_ice",
+}
+
+
+def paint_path(world, cells, block="minecraft:dirt_path"):
+    """Turns the ground of each (x, z) cell into a path that follows the terrain. Returns blocks set."""
+    count = 0
+    for x, z in cells:
+        top = world.surface_y(x, z)
+        if top is None:
+            continue
+        ground = world.ground_y(x, z, top)
+        if ground is None:
+            continue
+        current = world.get_block_name(x, ground, z) or ""
+        if "water" in current or "lava" in current:
+            continue
+        material = _PATH_ON.get(current, block) if block == "minecraft:dirt_path" else block
+        if world.set_block(x, ground, z, to_state({"Name": material})):
+            count += 1
+        for y in (ground + 1, ground + 2):
+            above = world.get_block_name(x, y, z)
+            if above and above not in AIR_NAMES and not is_ground(above):
+                world.set_block(x, y, z, AIR_STATE)
+    return count

@@ -8,6 +8,10 @@ class MapViewer(QWidget):
     hover_changed = pyqtSignal(int, int, int)  # x, z, y height
     structure_placed = pyqtSignal(int, int)    # grid_x, grid_z
     rotate_requested = pyqtSignal()            # R key pressed
+    bridge_requested = pyqtSignal(int, int, int, int)  # grid x/z of the two banks
+    area_selected = pyqtSignal(int, int, int, int)     # grid x1, z1, x2, z2 of the selected area
+    mode_cancelled = pyqtSignal()
+    point_selected = pyqtSignal(int, int)              # grid x/z of a single click ("point" mode)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,6 +45,11 @@ class MapViewer(QWidget):
         self.is_locked = False
         self.structure_preview_pixmap = None
         self.staged_placements = []
+        # Interaction mode: "place" (structures), "bridge" (click the two banks), "select" (drag an area)
+        self.mode = "place"
+        self.bridge_start = None
+        self.select_start = None
+        self.select_end = None
         
         # UI Styling (Harmonious Premium Theme)
         self.grid_color = QColor(255, 255, 255, 20)
@@ -119,33 +128,28 @@ class MapViewer(QWidget):
                 return QColor(192, 57, 43)
             return QColor(189, 195, 199)
 
-    def precompute_structure_preview(self):
-        if not self.selected_structure:
-            self.structure_preview_pixmap = None
-            return
-            
-        w = self.selected_structure.width
-        l = self.selected_structure.length
-        h = self.selected_structure.height
-        
-        img = QImage(w, l, QImage.Format.Format_ARGB32)
+    def structure_pixmap(self, structure):
+        """Top-down picture of a structure (one pixel per column, color of the top block)."""
+        top = {}
+        for (x, y, z), block in structure.blocks.items():
+            name = block.get("Name", "minecraft:air")
+            if name != "minecraft:air" and y >= top.get((x, z), (-1, None))[0]:
+                top[(x, z)] = (y, name)
+        img = QImage(max(structure.width, 1), max(structure.length, 1), QImage.Format.Format_ARGB32)
         img.fill(Qt.GlobalColor.transparent)
-        
-        for z in range(l):
-            for x in range(w):
-                found_color = None
-                for y in range(h - 1, -1, -1):
-                    block = self.selected_structure.get_block(x, y, z)
-                    name = block.get("Name", "minecraft:air")
-                    if name != "minecraft:air":
-                        found_color = self.get_block_color(name)
-                        break
-                if found_color:
-                    img.setPixelColor(x, z, found_color)
-                else:
-                    img.setPixelColor(x, z, QColor(0, 0, 0, 0))
-                    
-        self.structure_preview_pixmap = QPixmap.fromImage(img)
+        for (x, z), (_, name) in top.items():
+            img.setPixelColor(x, z, self.get_block_color(name))
+        return QPixmap.fromImage(img)
+
+    def precompute_structure_preview(self):
+        self.structure_preview_pixmap = self.structure_pixmap(self.selected_structure) if self.selected_structure else None
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.bridge_start = None
+        self.select_start = self.select_end = None
+        self.setCursor(Qt.CursorShape.CrossCursor if mode != "place" else Qt.CursorShape.ArrowCursor)
+        self.update()
 
     def set_selected_structure(self, structure, keep_lock=False):
         self.selected_structure = structure
@@ -314,7 +318,17 @@ class MapViewer(QWidget):
             
         # Draw Staged Placements
         if self.staged_placements and self.map_pixmap and self.region:
-            for item in self.staged_placements:
+            path_color = QColor(214, 180, 120, 170)
+            flat = []
+            for entry in self.staged_placements:
+                flat.extend(entry["items"] if entry.get("kind") == "group" else [entry])
+            for item in flat:
+                if item.get("kind") == "path":
+                    for (x, z) in item.get("cells", ()):
+                        painter.fillRect(QRectF(x - self.region.rx * 512, z - self.region.rz * 512, 1, 1), path_color)
+                    continue
+                if "preview_pixmap" not in item or item["preview_pixmap"] is None:
+                    item["preview_pixmap"] = self.structure_pixmap(item["structure"])
                 s = item["structure"]
                 # Staged placements are stored in world coordinates (they may span regions)
                 gx = item["world_x"] - self.region.rx * 512
@@ -343,11 +357,25 @@ class MapViewer(QWidget):
                 painter.drawRect(rect)
                 
                 # Draw a tiny text overlay with the structure name and coordinates
-                font = QFont("Inter", 6)
-                painter.setFont(font)
-                painter.setPen(QColor(180, 180, 180))
-                text_rect = QRectF(gx, gz + sl, max(80, sw), 12)
-                painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"{name} (Y:{y_val})")
+                if sw > 2 or sl > 2:
+                    font = QFont("Inter", 6)
+                    painter.setFont(font)
+                    painter.setPen(QColor(180, 180, 180))
+                    text_rect = QRectF(gx, gz + sl, max(80, sw), 12)
+                    painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"{name} (Y:{y_val})")
+
+        # Bridge / area selection overlays
+        if self.mode == "bridge" and self.bridge_start and self.mouse_screen_pos is not None:
+            gx, gz = self.screen_to_grid(self.mouse_screen_pos)
+            painter.setPen(QPen(QColor(241, 196, 15, 230), 1.5, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(self.bridge_start[0] + 0.5, self.bridge_start[1] + 0.5), QPointF(gx + 0.5, gz + 0.5))
+            painter.fillRect(QRectF(self.bridge_start[0] - 1, self.bridge_start[1] - 1, 3, 3), QColor(241, 196, 15, 230))
+        if self.mode == "select" and self.select_start and self.select_end:
+            (x1, z1), (x2, z2) = self.select_start, self.select_end
+            rect = QRectF(min(x1, x2), min(z1, z2), abs(x2 - x1) + 1, abs(z2 - z1) + 1)
+            painter.fillRect(rect, QColor(52, 152, 219, 50))
+            painter.setPen(QPen(QColor(52, 152, 219, 230), 1.2, Qt.PenStyle.DashLine))
+            painter.drawRect(rect)
 
         # Draw Structure Preview
         if self.selected_structure and self.map_pixmap:
@@ -489,6 +517,19 @@ class MapViewer(QWidget):
             self.is_panning = True
             self.last_mouse_pos = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.LeftButton and self.mode == "bridge" and self.map_pixmap:
+            grid_x, grid_z = self.screen_to_grid(event.position())
+            if self.bridge_start is None:
+                self.bridge_start = (grid_x, grid_z)
+            else:
+                (ax, az), self.bridge_start = self.bridge_start, None
+                self.bridge_requested.emit(ax, az, grid_x, grid_z)
+            self.update()
+        elif event.button() == Qt.MouseButton.LeftButton and self.mode == "point" and self.map_pixmap:
+            self.point_selected.emit(*self.screen_to_grid(event.position()))
+        elif event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and self.map_pixmap:
+            self.select_start = self.select_end = self.screen_to_grid(event.position())
+            self.update()
         elif event.button() == Qt.MouseButton.LeftButton:
             if self.selected_structure and self.map_pixmap:
                 grid_x, grid_z = self.screen_to_grid(event.position())
@@ -523,6 +564,13 @@ class MapViewer(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and self.select_start:
+            (x1, z1), (x2, z2) = self.select_start, self.screen_to_grid(event.position())
+            self.select_start = self.select_end = None
+            self.update()
+            if abs(x2 - x1) >= 1 and abs(z2 - z1) >= 1:
+                self.area_selected.emit(min(x1, x2), min(z1, z2), max(x1, x2), max(z1, z2))
+            return
         if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.LeftButton:
             if self.is_dragging_structure:
                 self.is_dragging_structure = False
@@ -543,6 +591,16 @@ class MapViewer(QWidget):
             self.update()
             return
             
+        if self.mode == "select" and self.select_start:
+            self.select_end = (grid_x, grid_z)
+            self.trigger_hover_event(grid_x, grid_z)
+            self.update()
+            return
+        if self.mode in ("bridge", "point"):
+            self.trigger_hover_event(grid_x, grid_z)
+            self.update()
+            return
+
         # Dragging structure preview box
         if self.is_dragging_structure and self.selected_structure:
             self.preview_grid_x = grid_x - self.drag_offset_x
@@ -601,6 +659,10 @@ class MapViewer(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.mode != "place":
+            self.set_mode("place")
+            self.mode_cancelled.emit()
+            return
         if event.key() == Qt.Key.Key_R and self.selected_structure:
             # The main window owns the selected structure: rotating only the preview
             # here would inject a structure different from the one displayed.

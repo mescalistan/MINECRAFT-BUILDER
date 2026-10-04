@@ -14,6 +14,13 @@
   - Basta indicare un qualsiasi percorso legato al mondo: la cartella del mondo, una sua sottocartella (`region`, `DIM-1`, `playerdata`...), `level.dat`, un file `.mca`, la cartella `saves` o `.minecraft`. L'app ricava da sola cartella dei salvataggi, mondo e dimensione.
   - Il percorso si può scegliere con *Sfoglia...*, incollare nel campo (Invio) o trascinare sulla finestra; da riga di comando: `py -3 main.py "percorso"`.
   - Selettore Overworld / Nether / End, elenco dei soli mondi validi (dal più recente) e ripresa automatica dell'ultimo mondo aperto.
+- 🗂️ **Libreria per categorie**: Case, Castelli e fortezze, Torri, Ponti, Monumenti, Templi e luoghi sacri, Fattorie e animali, Piazze e decorazioni, Utilità e magia, Navi, Rovine e portali, Fantascienza e Ritagli, con ricerca per nome/descrizione.
+- 🌉 **Ponti su misura** (scheda *Ponti*): quattro stili (pietra ad archi, legno, mattoni del Nether, sospeso) di qualsiasi lunghezza.
+  - *Disegna ponte tra due sponde*: due clic sulla mappa e il ponte viene calcolato con lunghezza, direzione e altezza giuste (sempre sopra il livello dell'acqua); i piloni scendono fino al fondo nello stesso materiale.
+  - Se il nuovo ponte parte vicino alla fine di un ponte esistente (in coda o costruito in precedenza, memorizzato nel mondo) lo prosegue senza interruzioni, nello stesso stile e alla stessa altezza.
+  - I ponti della libreria si possono allungare o accorciare mantenendo lo stile.
+- 🏘️ **Generatore di villaggi** (scheda *Villaggio*): pianura, borgo medievale o nordico, in tre dimensioni. Crea piazza, strade a croce che seguono il terreno, edifici con la porta rivolta verso la strada, fattorie, sentieri e lampioni, evitando acqua, pendii e zone non generate.
+- ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura. In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno.
 - 📍 **Rilevamento e Tracciamento Giocatore**:
   - Localizzazione automatica delle ultime coordinate del giocatore dai file di salvataggio (`level.dat`, `playerdata`, `players`).
   - Animazione radar circolare pulsante sul marker del giocatore.
@@ -38,6 +45,8 @@
   - Scrittura atomica e backup automatico di ogni file `.mca` modificato.
   - Luce e heightmap dei chunk modificati invalidate: Minecraft le ricalcola al caricamento.
   - I chunk non generati vengono saltati (mai creati vuoti) e i blocchi di mod vengono saltati nei mondi vanilla.
+  - Compatibile con i mondi dalla 1.18 a Minecraft 26.x: legge e scrive sia il formato classico dei blocchi (`{Name, Properties}`) sia quello nuovo (stringhe e `{id, properties}`), e aggiorna i nomi dei blocchi rinominati (es. `chain` → `iron_chain`, `grass` → `short_grass`) in base alla versione del mondo.
+  - Le fondamenta riempiono solo vuoti piccoli (fino a 10 blocchi) e mai sotto strutture appoggiate sull'acqua: le costruzioni sospese restano sospese; i piloni dei ponti scendono fino al fondo.
   - Rilevamento dello stato di blocco del mondo (`session.lock`) per prevenire corruzioni di dati.
   - Elevazione a Amministratore (UAC) solo su richiesta con `py -3 main.py --admin`.
   - Console di log high-tech con colorazione sintattica HTML delle operazioni.
@@ -84,7 +93,12 @@
 ├── main.py                 # Finestra principale, controller GUI, worker thread asincrono
 ├── map_viewer.py           # Canvas interattivo della mappa, rendering e HUD
 ├── mca_codec.py            # Parser e scrittore Anvil (.mca) lazy, ChunkEditor per sezioni, heightmap
-├── world_editor.py         # Accesso al mondo in coordinate globali (multi-regione) e iniezione strutture
+├── world_editor.py         # Accesso al mondo in coordinate globali (multi-regione), iniezione, sentieri
+├── world_locator.py        # Riconosce mondo/saves/dimensione da qualsiasi percorso
+├── catalog.py              # Catalogo delle strutture con categorie in italiano
+├── structure_generators.py # Ponti parametrici, ponte tra due sponde con aggancio, lampioni
+├── village_generator.py    # Generatore di villaggi
+├── world_extractor.py      # Ritaglio di zone di mondo come strutture
 ├── nbt_codec.py            # Codec puro Python per la lettura/scrittura di file NBT
 ├── structure_manager.py    # Caricatore di strutture (.nbt/.schem) e trasformazioni 3D
 ├── scraper.py              # Catalogo schemi online e downloader
