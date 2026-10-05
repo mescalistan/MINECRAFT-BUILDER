@@ -6,6 +6,7 @@ Uso:
     python tools/render_templates.py lighthouse      # solo alcuni
     python tools/render_templates.py --gallery       # anche i fogli riassuntivi docs/gallery_*.png
     python tools/render_templates.py --back          # vista dal lato opposto (ruotata di 180 gradi)
+    python tools/render_templates.py --cut=7 nome    # spaccato: solo gli strati fino a y=7 (strutture interrate)
 """
 import os
 import sys
@@ -228,6 +229,7 @@ def main(argv):
     reg = build_templates.all_templates()
     names = [a for a in argv if not a.startswith("--")] or list(reg)
     back = "--back" in argv
+    cut = next((int(a.split("=", 1)[1]) for a in argv if a.startswith("--cut=")), None)
     os.makedirs(OUT_DIR, exist_ok=True)
     renderer = IsoRenderer()
     by_cat = {}
@@ -240,8 +242,13 @@ def main(argv):
         if back:
             s = s.rotate(180)
         title = reg[name]["title"] if name in reg else name
+        if cut is not None:
+            s = Structure(s.width, min(s.height, cut + 1), s.length,
+                          {p: b for p, b in s.blocks.items() if p[1] <= cut}, s.data_version)
+            title += f" (spaccato a y={cut})"
         img = renderer.render(s, title=title)
-        out = os.path.join(OUT_DIR, f"{name}{'_back' if back else ''}.png")
+        suffix = ("_back" if back else "") + (f"_cut{cut}" if cut is not None else "")
+        out = os.path.join(OUT_DIR, f"{name}{suffix}.png")
         img.quantize(colors=256, method=Image.Quantize.MEDIANCUT).save(out, optimize=True)
         by_cat.setdefault(reg.get(name, {}).get("category", "Altro"), []).append(img)
         print(f"{name:28s} -> {os.path.relpath(out)}")

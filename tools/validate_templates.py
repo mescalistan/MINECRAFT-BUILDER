@@ -38,12 +38,20 @@ class Grid:
 
     def __init__(self, struct):
         self.s = struct
-        self.w, self.h, self.l = struct.width, struct.height, struct.length
+        # Underground builds (ground_offset > 0): y is shifted so that y = 0 is still the terrain
+        # level; the layers below have negative y and their void cells are solid ground.
+        self.g = getattr(struct, "ground_offset", 0) or 0
+        self.ymin = -self.g
+        self.w, self.h, self.l = struct.width, struct.height - self.g, struct.length
         self.names = {}
         self.props = {}
+        self.dug = set()          # cells explicitly set to air below the terrain level
         for (x, y, z), b in struct.blocks.items():
+            y -= self.g
             n = bi.short(b["Name"])
             if n in bi.AIR_LIKE:
+                if y < 0:
+                    self.dug.add((x, y, z))
                 continue
             self.names[(x, y, z)] = n
             if b.get("Properties"):
@@ -51,18 +59,23 @@ class Grid:
 
     def name(self, x, y, z):
         if y < 0:
-            return "grass_block"  # terrain
+            n = self.names.get((x, y, z))
+            if n is not None:
+                return n
+            if (x, y, z) in self.dug:
+                return "air"
+            return "grass_block" if y == -1 else "stone"  # terrain
         return self.names.get((x, y, z), "air")
 
     def in_bounds(self, x, y, z):
-        return 0 <= x < self.w and 0 <= y < self.h and 0 <= z < self.l
+        return 0 <= x < self.w and self.ymin <= y < self.h and 0 <= z < self.l
 
     def passable(self, x, y, z):
         n = self.name(x, y, z)
         return bi.is_passable(n) or n.endswith("fence_gate")
 
     def standable(self, x, y, z):
-        return y < 0 or bi.is_standable(self.name(x, y, z))
+        return bi.is_standable(self.name(x, y, z))     # below y = 0 name() is the terrain unless dug
 
     def climbable(self, x, y, z):
         return bi.is_climbable(self.name(x, y, z))
@@ -72,7 +85,7 @@ class Grid:
 
 def check_names(grid, errors):
     for pos, n in grid.names.items():
-        full = grid.s.blocks[pos]["Name"]
+        full = grid.s.blocks[(pos[0], pos[1] + grid.g, pos[2])]["Name"]
         if not full.startswith("minecraft:") or n not in bi.VANILLA_BLOCKS:
             errors.append(f"blocco non vanilla '{full}' in {pos}")
             continue
@@ -159,7 +172,7 @@ def check_fluids(grid, warnings):
             warnings.append(f"{n} non sorgente in {(x, y, z)}")
         for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0)):
             nx, ny, nz = x + dx, y + dy, z + dz
-            if ny < 0:
+            if ny < grid.ymin:
                 continue
             nb = grid.name(nx, ny, nz)
             if bi.is_air(nb) or (bi.is_plant(nb) and nb not in ("seagrass", "kelp", "kelp_plant", "lily_pad")):
@@ -176,7 +189,7 @@ def walkable(grid, x, y, z):
         return True
     if not (grid.passable(x, y + 1, z) or grid.climbable(x, y + 1, z)):
         return False
-    return grid.standable(x, y - 1, z) and not grid.passable(x, y - 1, z) or y == 0 or grid.climbable(x, y - 1, z)
+    return grid.standable(x, y - 1, z) and not grid.passable(x, y - 1, z) or grid.climbable(x, y - 1, z)
 
 
 def reachable_cells(grid):
@@ -190,7 +203,7 @@ def reachable_cells(grid):
     ymax = grid.h + 1
 
     def ok(x, y, z):
-        return -1 <= x <= grid.w and -1 <= z <= grid.l and 0 <= y <= ymax and walkable(grid, x, y, z)
+        return -1 <= x <= grid.w and -1 <= z <= grid.l and grid.ymin <= y <= ymax and walkable(grid, x, y, z)
 
     while q:
         x, y, z = q.popleft()
@@ -215,7 +228,7 @@ def reachable_cells(grid):
         if grid.climbable(x, y, z) or grid.climbable(x, y + 1, z):
             if ok(x, y + 1, z) or (grid.passable(x, y + 1, z) and grid.climbable(x, y + 1, z)):
                 nexts.append((x, y + 1, z))
-        if grid.climbable(x, y - 1, z) or (grid.passable(x, y - 1, z) and y > 0):
+        if grid.climbable(x, y - 1, z) or (grid.passable(x, y - 1, z) and y > grid.ymin):
             if ok(x, y - 1, z):
                 nexts.append((x, y - 1, z))
         for c in nexts:
@@ -236,7 +249,7 @@ def line_of_sight(grid, eye, target):
         cz = math.floor(ez + (tz + 0.5 - ez) * t)
         if (cx, cy, cz) == (tx, ty, tz):
             return True
-        if bi.is_full_solid(grid.name(cx, cy, cz)) and cy >= 0:
+        if bi.is_full_solid(grid.name(cx, cy, cz)) and (cy >= 0 or grid.g):
             return False
     return True
 
@@ -257,8 +270,15 @@ def check_access(grid, reach, errors):
                         return True
         return False
 
+    sealed = [(x1, y1 - grid.g, z1, x2, y2 - grid.g, z2) for x1, y1, z1, x2, y2, z2 in getattr(grid.s, "technical", [])]
+
+    def in_technical_area(p):
+        return any(b[0] <= p[0] <= b[3] and b[1] <= p[1] <= b[4] and b[2] <= p[2] <= b[5] for b in sealed)
+
     unreachable = []
     for pos, n in grid.names.items():
+        if in_technical_area(pos):
+            continue
         if bi.is_interactive(n) and not (n.endswith("_bed") and grid.props.get(pos, {}).get("part") == "head"):
             if not can_use(pos):
                 unreachable.append(f"{n}{pos}")
@@ -268,7 +288,8 @@ def check_access(grid, reach, errors):
             sides = [(x + dx, y, z + dz), (x - dx, y, z - dz)]
             if not any(s in reach for s in sides):
                 errors.append(f"porta {pos} non raggiungibile da nessun lato")
-            elif not all(walkable(grid, *s) or walkable(grid, s[0], s[1] - 1, s[2]) for s in sides):
+            elif not all(walkable(grid, *s) or walkable(grid, s[0], s[1] - 1, s[2])
+                         or grid.name(*s) in ("water", "bubble_column") for s in sides):  # e.g. water lifts
                 # a side one block lower is fine: the player jumps onto the threshold
                 errors.append(f"porta {pos} bloccata su un lato")
     if unreachable:
@@ -290,7 +311,7 @@ def light_map(grid):
             continue
         for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)):
             p = (x + dx, y + dy, z + dz)
-            if not (-1 <= p[0] <= grid.w and 0 <= p[1] <= grid.h and -1 <= p[2] <= grid.l):
+            if not (-1 <= p[0] <= grid.w and grid.ymin <= p[1] <= grid.h and -1 <= p[2] <= grid.l):
                 continue
             if bi.blocks_light(grid.name(*p)):
                 continue
@@ -306,7 +327,7 @@ def sky_light_map(grid):
     q = deque()
     for x in range(-1, grid.w + 1):
         for z in range(-1, grid.l + 1):
-            for y in range(grid.h, -1, -1):
+            for y in range(grid.h, grid.ymin - 1, -1):
                 if bi.blocks_light(grid.name(x, y, z)):
                     break
                 level[(x, y, z)] = 15
@@ -318,7 +339,7 @@ def sky_light_map(grid):
             continue
         for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, 1), (0, 0, -1)):
             p = (x + dx, y + dy, z + dz)
-            if not (-1 <= p[0] <= grid.w and 0 <= p[1] <= grid.h and -1 <= p[2] <= grid.l):
+            if not (-1 <= p[0] <= grid.w and grid.ymin <= p[1] <= grid.h and -1 <= p[2] <= grid.l):
                 continue
             if bi.blocks_light(grid.name(*p)):
                 continue
@@ -338,7 +359,7 @@ def check_dark_spots(grid, warnings, stats):
     dark = []
     for x in range(grid.w):
         for z in range(grid.l):
-            for y in range(0, grid.h):
+            for y in range(grid.ymin, grid.h):
                 if not (bi.is_air(grid.name(x, y, z)) and bi.is_air(grid.name(x, y + 1, z))):
                     continue
                 if sky.get((x, y, z), 0) >= INDOOR_SKY:

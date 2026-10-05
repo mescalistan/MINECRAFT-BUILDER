@@ -138,6 +138,12 @@
   "description": "Avamposto dei predoni in quercia scura e betulla, con piani collegati da scale e terrazza di vedetta."
  },
  {
+  "file": "iron_farm.nbt",
+  "title": "Fonderia del ferro (iron farm 1.21)",
+  "category": "Farm automatiche",
+  "description": "Iron farm compatta per Java 1.21+ dentro una fonderia di mattoni e ardesia: 3 villager sui letti e 1 zombie (scritti dall'app), piattaforma d'acqua che porta i golem in un pozzo con lama di lava sostenuta da cartelli, tramogge e 4 bauli al piano terra. Di notte un sensore di luce chiude la feritoia dello zombie per far dormire i villager; la leva accanto al pozzo spegne la farm. Circa 300-400 lingotti all'ora di giorno: vedi la checklist nel README prima di usarla."
+ },
+ {
   "file": "animal_pen.nbt",
   "title": "Animal Pen",
   "category": "Fattorie e animali",
@@ -178,6 +184,12 @@
   "title": "Watermill",
   "category": "Fattorie e animali",
   "description": "Mulino ad acqua con grande ruota a pale sul canale, basamento in pietra, piano a graticcio, macina, sacchi di farina e soppalco."
+ },
+ {
+  "file": "underground_hub.nbt",
+  "title": "Hub sotterraneo esagonale con magazzino",
+  "category": "Hub e magazzini",
+  "description": "Sala esagonale gotico-industriale 22 blocchi sotto terra con cupola a costoloni e lampadario, quattro stazioni (incanti, alchimia, officina, fonderia), galleria-magazzino con smistatore automatico a 9 oggetti (barili con nome, baule di troppo pieno, deposito con canale d'acqua), ascensore a bolle di sabbia delle anime con scala a chiocciola e chiosco in superficie, porte di servizio a est e ovest per agganciare altri moduli. Redstone tutta nascosta dietro le pareti; i filtri e i nomi dei barili sono gia' scritti dall'app."
  },
  {
   "file": "arc_de_triomphe.nbt",

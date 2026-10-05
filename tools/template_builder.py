@@ -17,7 +17,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from nbt_codec import save_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String
+from nbt_codec import (save_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String, TAG_Byte, TAG_Double, TAG_Float,
+                       TAG_Int_Array)
 import blockinfo
 
 DATA_VERSION = 3955  # Minecraft 1.21.1
@@ -67,6 +68,20 @@ def template(name, title, category, description):
     return wrap
 
 
+def item_stack(item, count=1, slot=None, name=None):
+    """
+    Item compound as stored in containers (1.20.5+ format: id + int count). 'name' renames the item
+    (custom_name component; converted to the JSON form for pre-1.21.5 worlds at injection).
+    """
+    tag = TAG_Compound({"id": TAG_String(item if ":" in item else "minecraft:" + item),
+                        "count": TAG_Int(count)})
+    if slot is not None:
+        tag["Slot"] = TAG_Byte(slot)
+    if name:
+        tag["components"] = TAG_Compound({"minecraft:custom_name": TAG_String(name)})
+    return tag
+
+
 # ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
@@ -76,6 +91,10 @@ class Builder:
         self.w, self.h, self.l = width, height, length
         self.cells = {}  # (x, y, z) -> (name, props_dict)
         self.rng = random.Random(seed)
+        self.block_nbt = {}    # (x, y, z) -> block entity data written with the block (container items)
+        self.entities = []     # [{"pos": (x, y, z), "nbt": compound, "yaw": degrees}]
+        self.ground_offset = 0  # layers below the terrain level (underground builds)
+        self.technical = []     # sealed technical areas (x1, y1, z1, x2, y2, z2): hidden on purpose
 
     # ---- primitives ----
     def inside(self, x, y, z):
@@ -84,6 +103,54 @@ class Builder:
     def set(self, x, y, z, block, **props):
         if self.inside(x, y, z):
             self.cells[(x, y, z)] = (_short(block), {k: str(v).lower() for k, v in props.items()})
+            if self.block_nbt:
+                self.block_nbt.pop((x, y, z), None)
+
+    # ---- block entity data and entities ----
+    def contents(self, x, y, z, items, name=None):
+        """
+        Items of the container at (x, y, z): a list of (item, count) put in slots 0, 1, 2...
+        or of (slot, item, count), optionally followed by the item's custom name.
+        'name' is the custom name shown in the container window.
+        """
+        stacks = []
+        for i, entry in enumerate(items):
+            entry = tuple(entry)
+            if isinstance(entry[0], int):
+                slot, item, count, label = (entry + (None,))[:4]
+            else:
+                item, count, label = (entry + (None,))[:3]
+                slot = i
+            stacks.append(item_stack(item, count, slot, label))
+        data = TAG_Compound({"Items": TAG_List(10, stacks)})
+        if name:
+            data["CustomName"] = TAG_String(name)
+        self.block_nbt[(x, y, z)] = data
+
+    def technical_area(self, x1, y1, z1, x2, y2, z2):
+        """
+        Declares a sealed technical area (redstone, villager pods): the validator does not require
+        its interactive blocks to be reachable. Use it only for parts hidden on purpose.
+        """
+        self.technical.append((min(x1, x2), min(y1, y2), min(z1, z2), max(x1, x2), max(y1, y2), max(z1, z2)))
+
+    def entity(self, x, y, z, entity_id, yaw=0.0, **tags):
+        """
+        Entity standing in the middle of block cell (x, y, z). 'tags' are extra NBT tags
+        (nbt_codec TAG objects). Yaw: 0 = looking south, 90 = west, 180 = north, 270 = east.
+        """
+        nbt = TAG_Compound({"id": TAG_String(entity_id if ":" in entity_id else "minecraft:" + entity_id)})
+        nbt.update(tags)
+        self.entities.append({"pos": (x + 0.5, float(y), z + 0.5), "nbt": nbt, "yaw": float(yaw)})
+
+    def villager(self, x, y, z, profession="none", biome="plains", yaw=0.0):
+        self.entity(x, y, z, "villager", yaw, PersistenceRequired=TAG_Byte(1), VillagerData=TAG_Compound({
+            "profession": TAG_String("minecraft:" + profession), "type": TAG_String("minecraft:" + biome),
+            "level": TAG_Int(1)}))
+
+    def mob(self, x, y, z, entity_id, yaw=0.0, **tags):
+        """Hostile/passive mob that never despawns."""
+        self.entity(x, y, z, entity_id, yaw, PersistenceRequired=TAG_Byte(1), **tags)
 
     def get(self, x, y, z):
         return self.cells.get((x, y, z), (None, {}))[0]
@@ -529,8 +596,10 @@ class Builder:
                 ok = False
                 if nb == "minecraft:redstone_wire":
                     ok = True
-                elif nb in ("minecraft:repeater", "minecraft:comparator", "minecraft:observer"):
+                elif nb in ("minecraft:repeater", "minecraft:observer"):
                     ok = nprops.get("facing") in (d, OPPOSITE[d])
+                elif nb == "minecraft:comparator":
+                    ok = True  # comparators take side inputs: dust connects on every side
                 elif nb and nb.split(":", 1)[1] in sources:
                     ok = True
                 elif not _is_solid(self.get(x, y + 1, z)):
@@ -571,16 +640,34 @@ class Builder:
                 if props:
                     entry["Properties"] = TAG_Compound({k: TAG_String(v) for k, v in sorted(props.items())})
                 palette.append(entry)
-            blocks.append(TAG_Compound({
+            entry = TAG_Compound({
                 "pos": TAG_List(3, [TAG_Int(x), TAG_Int(y), TAG_Int(z)]),
                 "state": TAG_Int(index[key]),
-            }))
+            })
+            if (x, y, z) in self.block_nbt:
+                entry["nbt"] = self.block_nbt[(x, y, z)]
+            blocks.append(entry)
         root = TAG_Compound()
         root["DataVersion"] = TAG_Int(DATA_VERSION)
         root["size"] = TAG_List(3, [TAG_Int(self.w), TAG_Int(self.h), TAG_Int(self.l)])
         root["palette"] = TAG_List(10, palette)
         root["blocks"] = TAG_List(10, blocks)
-        root["entities"] = TAG_List(10, [])
+        entities = []
+        for ent in self.entities:
+            ex, ey, ez = ent["pos"]
+            nbt = TAG_Compound(ent["nbt"])
+            nbt["Rotation"] = TAG_List(5, [TAG_Float(ent.get("yaw", 0.0)), TAG_Float(0.0)])
+            entities.append(TAG_Compound({
+                "pos": TAG_List(6, [TAG_Double(ex), TAG_Double(ey), TAG_Double(ez)]),
+                "blockPos": TAG_List(3, [TAG_Int(math.floor(ex)), TAG_Int(math.floor(ey)), TAG_Int(math.floor(ez))]),
+                "nbt": nbt,
+            }))
+        root["entities"] = TAG_List(10, entities)
+        if self.ground_offset or self.technical:
+            meta = TAG_Compound({"groundOffset": TAG_Int(self.ground_offset)})
+            if self.technical:
+                meta["technical"] = TAG_List(11, [TAG_Int_Array(list(box)) for box in self.technical])
+            root["MinecraftBuilder"] = meta
         return root
 
     def to_structure(self):
@@ -588,7 +675,12 @@ class Builder:
         from structure_manager import Structure
         self.finalize()
         blocks = {pos: {"Name": name, "Properties": dict(props)} for pos, (name, props) in self.cells.items()}
-        return Structure(self.w, self.h, self.l, blocks, DATA_VERSION)
+        struct = Structure(self.w, self.h, self.l, blocks, DATA_VERSION)
+        struct.ground_offset = self.ground_offset
+        struct.block_nbt = {p: d for p, d in self.block_nbt.items() if p in self.cells}
+        struct.entities = [dict(e) for e in self.entities]
+        struct.technical = list(self.technical)
+        return struct
 
     def save(self, path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)

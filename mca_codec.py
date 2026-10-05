@@ -203,6 +203,10 @@ class MCARegion:
             filename = os.path.basename(self.file_path)
             ts = int(time.time())
             backup_path = os.path.join(backup_dir, f"{filename}.{ts}.bak")
+            n = 1
+            while os.path.exists(backup_path):        # two injections in the same second
+                backup_path = os.path.join(backup_dir, f"{filename}.{ts}_{n}.bak")
+                n += 1
             shutil.copy2(self.file_path, backup_path)
             return backup_path
         return None
@@ -558,6 +562,7 @@ class ChunkEditor:
         self._cache = {}       # sy -> [palette, indices, key->index]
         self._dirty_secs = set()
         self.changed = set()   # absolute (x, y, z) of changed blocks
+        self.block_data = {}   # absolute (x, y, z) -> block entity tags to merge in on flush
 
     def _load(self, sy):
         entry = self._cache.get(sy)
@@ -599,10 +604,14 @@ class ChunkEditor:
 
     @property
     def dirty(self):
-        return bool(self._dirty_secs)
+        return bool(self._dirty_secs or self.block_data)
+
+    def set_block_data(self, x, y, z, data):
+        """Block entity data (container items...) for the block at absolute (x, y, z), written on flush."""
+        self.block_data[(x, y, z)] = data
 
     def flush(self):
-        if not self._dirty_secs:
+        if not self.dirty:
             return False
         for sy in self._dirty_secs:
             palette, indices, _ = self._cache[sy]
@@ -624,6 +633,25 @@ class ChunkEditor:
             if be_id:
                 kept.append(TAG_Compound({"id": TAG_String(be_id), "x": TAG_Int(x), "y": TAG_Int(y),
                                           "z": TAG_Int(z), "keepPacked": TAG_Byte(0)}))
+        if self.block_data:
+            by_pos = {(int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))): i
+                      for i, be in enumerate(kept)}
+            for (x, y, z), data in self.block_data.items():
+                i = by_pos.get((x, y, z))
+                if i is None:
+                    state = self.get_block(x - self.chunk_x * 16, y, z - self.chunk_z * 16)
+                    be_id = block_entity_id(str(state.get("Name", ""))) if state is not None else None
+                    if not be_id:
+                        continue
+                    kept.append(TAG_Compound({"id": TAG_String(be_id), "x": TAG_Int(x), "y": TAG_Int(y),
+                                              "z": TAG_Int(z), "keepPacked": TAG_Byte(0)}))
+                    i = len(kept) - 1
+                be = TAG_Compound(kept[i])
+                for k, v in data.items():
+                    if k not in ("id", "x", "y", "z"):
+                        be[k] = v
+                kept[i] = be
+            self.block_data = {}
         if len(kept) != len(be_list) or any(k is not o for k, o in zip(kept, be_list)):
             self.nbt["block_entities"] = TAG_List(10, kept)
 

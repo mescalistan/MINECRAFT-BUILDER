@@ -17,7 +17,7 @@
   - Basta indicare un qualsiasi percorso legato al mondo: la cartella del mondo, una sua sottocartella (`region`, `DIM-1`, `playerdata`...), `level.dat`, un file `.mca`, la cartella `saves` o `.minecraft`. L'app ricava da sola cartella dei salvataggi, mondo e dimensione.
   - Il percorso si può scegliere con *Sfoglia...*, incollare nel campo (Invio) o trascinare sulla finestra; da riga di comando: `py -3 main.py "percorso"`.
   - Selettore Overworld / Nether / End, elenco dei soli mondi validi (dal più recente) e ripresa automatica dell'ultimo mondo aperto.
-- 🗂️ **Libreria per categorie**: Case, Castelli e fortezze, Torri, Ponti, Monumenti, Templi e luoghi sacri, Fattorie e animali, Piazze e decorazioni, Utilità e magia, Navi, Rovine e portali, Fantascienza e Ritagli, con ricerca per nome/descrizione.
+- 🗂️ **Libreria per categorie**: Case, Castelli e fortezze, Torri, Ponti, Monumenti, Templi e luoghi sacri, Fattorie e animali, Farm automatiche, Hub e magazzini, Piazze e decorazioni, Utilità e magia, Navi, Rovine e portali, Fantascienza e Ritagli, con ricerca per nome/descrizione.
 - 🌉 **Ponti su misura** (scheda *Ponti*): quattro stili (pietra ad archi, legno, mattoni del Nether, sospeso) di qualsiasi lunghezza.
   - *Disegna ponte tra due sponde*: due clic sulla mappa. Il ponte è dritto e parte dal primo clic (l'anteprima mostra l'ingombro mentre muovi il mouse); il profilo del terreno viene letto blocco per blocco e lunghezza, altezza, piloni e rampe vengono calcolati da soli.
   - Le estremità arrivano sempre a terra: se le sponde sono ad altezze diverse il ponte scende con una rampa di scale fino alla sponda più bassa, senza capi sospesi nel vuoto.
@@ -30,7 +30,8 @@
   - *Disegna il perimetro*: clic sui vertici sulla mappa (linee allineate a 0/45/90 gradi, Shift per linee libere), clic sul primo punto o Invio per chiudere, doppio clic per un tratto aperto, Backspace per togliere l'ultimo punto.
   - Il camminamento segue il terreno salendo o scendendo al massimo di un blocco alla volta (con scale), merli all'esterno, parapetto e lanterne all'interno, torri agli angoli e a intervalli regolari con porta verso l'interno e scala a pioli fino al tetto.
   - Porte: la posizione viene consigliata dove passa una strada o dove il terreno è libero, piano e asciutto (senza demolire costruzioni); se ne possono aggiungere altre con un clic. Tipi: arco aperto, portone con cancelli, **ponte levatoio**. Sulle mura oblique il tratto intorno alla porta viene raddrizzato, così il corpo di guardia si unisce alle mura senza sporgere.
-  - **Due leve per ogni porta**: una dentro (sul selciato del cortile, a sinistra della strada) e una nascosta fuori (in un cespuglio a destra della strada d'arrivo). Ogni scatto di una qualsiasi delle due apre o chiude la porta, quindi si può aprire da fuori, entrare e richiudere da dentro. Ogni leva poggia su un osservatore che manda un impulso a una lampadina di rame cerata (la memoria), letta da un comparatore. Nel portone il segnale spegne le torce sotto i cancelli e li chiude; nel ponte levatoio tiene alzato il ponte.
+  - **Portone a saracinesca**: un grande ingresso largo 5 blocchi con cornice scolpita, chiave di volta, caditoie, stendardi e due torrette merlate. Quando si chiude, 5 pistoni appiccicosi nascosti nel soffitto abbassano la grata di sbarre di ferro e 5 pistoni sotto la strada alzano una fila di blocchi: l'apertura si chiude tutta. I fili di redstone corrono dentro le torri e sotto la strada e non si vedono.
+  - **Due leve per ogni porta** (portone e ponte levatoio): una sul muro interno del corpo di guardia, accanto al passaggio, e una nascosta fuori in un cespuglio accanto alla strada d'arrivo. Funzionano come i due interruttori della luce delle scale: ogni scatto di una delle due apre o chiude la porta, quindi si apre da fuori, si entra e si richiude da dentro. La logica è un OR esclusivo fatto con due comparatori in sottrazione, verificato con un simulatore di redstone nei test. Nel ponte levatoio le leve tengono il ponte alzato, i sensori lo alzano da soli quando qualcuno si avvicina.
   - Ponte levatoio automatico: davanti alla porta c'è un fossato. Due sensori sculk nascosti sotto le strade, fuori dalla portata d'ascolto dei pistoni (così non si riattivano da soli), sentono chi si avvicina e 6 pistoni appiccicosi fanno emergere il ponte dall'acqua; un ramo ritardato con ripetitori lo tiene su durante il tempo di ricarica dei sensori e per circa due secondi dopo l'ultimo movimento, il tempo di attraversare. Il circuito è verificato da un simulatore di redstone nei test.
   - Luci automatiche: nel passaggio le lampade si accendono al movimento (sensori sculk) e sulle torri, sulla porta e lungo le mura si accendono da sole di notte (rilevatori di luce diurna invertiti).
 - 🏘️ **Generatore di villaggi** (scheda *Villaggio*): pianura, borgo medievale o nordico, in tre dimensioni. Crea piazza, strade a croce che seguono il terreno, edifici con la porta rivolta verso la strada, fattorie, sentieri e lampioni, evitando acqua, pendii e zone non generate.
@@ -40,7 +41,7 @@
   - Animazione radar circolare pulsante sul marker del giocatore.
   - Pulsante per centrare istantaneamente la visuale sulla regione del personaggio.
 - 🏗️ **Gestione e Posizionamento Strutture**:
-  - Libreria integrata di 78 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
+  - Libreria integrata di 80 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
   - Browser per cercare e scaricare schemi online.
   - Anteprima grafica top-down 2D dei blocchi reali con trasparenza per allineamento preciso.
   - Rotazione a 90° oraria (`R`) e drag-and-drop con click-to-place.
@@ -52,6 +53,13 @@
   - **Strutture a cavallo delle regioni**: i blocchi oltre il bordo del file `.mca` vengono scritti nelle regioni vicine.
   - **Rotazione completa**: oltre a `facing`/`axis` ruotano anche recinti, vetri, muretti, cartelli, stendardi e binari.
   - **Consiglio Posizione Ottimale**: Scanner euristico per individuare la zona più pianeggiante nelle vicinanze.
+- 🏭 **Hub sotterraneo e farm automatiche** (categorie *Hub e magazzini* e *Farm automatiche*):
+  - **Hub sotterraneo esagonale** (22 blocchi sotto terra): cupola gotica a costoloni, stazioni di incanti, alchimia, officina e fonderia, ascensore a bolle con scala a chiocciola fino a un chiosco in superficie, porte di servizio per agganciare altri moduli.
+  - **Magazzino automatico** dell'hub: smistatore a 9 oggetti, a prova di trabocco. I filtri sono già riempiti e i barili hanno già il nome.
+  - **Iron farm 1.21** in una fonderia di mattoni: 3 villager e 1 zombie già inclusi, piattaforma d'acqua e lama di lava, feritoia che si chiude di notte (così i villager dormono) e leva per spegnere la farm.
+  - Circuiti verificati con un simulatore di redstone analogico; scheda tecnica, distinta materiali e checklist di prova in gioco in [docs/HUB_E_IRON_FARM.md](docs/HUB_E_IRON_FARM.md).
+- 🧬 **Entità e contenuti**: i modelli possono contenere mob (scritti nella cartella `entities/` del mondo, persistenti, con un UUID nuovo) e oggetti nei contenitori, anche rinominati (formato adattato alla versione del mondo). Le strutture interrate dichiarano quanti strati stanno sotto il terreno e l'app propone la quota giusta.
+- ↩️ **Annulla ultima iniezione**: rimette le regioni come prima dell'ultima iniezione usando i backup automatici; la cronologia (ultime 20 iniezioni) è salvata nel mondo, quindi funziona anche dopo aver riavviato il programma e si può ripetere per annullare anche le precedenti. Toglie dalla mappa anche le strutture e i ponti di quell'iniezione.
 - ⚡ **Architettura Asincrona & Sicurezza**:
   - Iniezione blocchi gestita in un thread dedicato in background (`QThread`) senza bloccare l'interfaccia utente.
   - Modifica per sezioni (ogni sezione 16×16×16 viene decodificata e ricodificata una sola volta): migliaia di volte più veloce dell'approccio blocco per blocco.
@@ -133,7 +141,7 @@
 └── requirements.txt        # Dipendenze Python
 ```
 
-### 🧱 Libreria di template vanilla (78 modelli)
+### 🧱 Libreria di template vanilla (80 modelli)
 
 Tutti generati da codice con `python tools/build_templates.py` (solo blocchi vanilla, DataVersion 3955 / MC 1.21.1), validati automaticamente per la giocabilità e testati con iniezione in un mondo. Il livello y=0 di ogni modello è il primo strato sopra il terreno.
 
@@ -270,6 +278,15 @@ Strutture più dettagliate aggiunte di recente (ispirate alle costruzioni più p
 | Neuschwanstein Castle | `neuschwanstein.nbt` | Castello fiabesco su uno sperone di roccia: palazzo bianco, torre altissima con belvedere, torrette a cono, corpo di guardia rosso. |
 | Himeji, Santorini, Victorian, Alpine Chalet, Cottage, Red Barn, Watermill, Stave Church, Chinese Pavilion, City Gate | vari | Dieci edifici vetrina con più materiali, profondità e arredi. |
 
+#### 🏭 Hub e farm automatiche
+
+| Modello | File | Dimensioni (X×Y×Z) | Descrizione |
+|---|---|---|---|
+| Hub sotterraneo esagonale con magazzino | `underground_hub.nbt` | 39×38×57 (22 strati sotto terra) | Sala esagonale gotico-industriale con smistatore a 9 oggetti, ascensore a bolle, scala a chiocciola e chiosco in superficie. |
+| Fonderia del ferro (iron farm 1.21) | `iron_farm.nbt` | 18×29×18 | Iron farm compatta con villager e zombie inclusi, lama di lava, feritoia giorno/notte e leva di spegnimento. |
+
+Dettagli e prove in gioco: [docs/HUB_E_IRON_FARM.md](docs/HUB_E_IRON_FARM.md). Il prompt di progetto per i prossimi moduli è in [docs/PROMPT_ARCHITETTO.md](docs/PROMPT_ARCHITETTO.md).
+
 Rifatte da zero perché troppo semplici: Arco di Trionfo (archivolti, rilievi, attico, terrazza), Moai (volti scolpiti, braccia, pukao), Colosseo (arcate regolari, corridoi, gradinate, rovina sul retro), Igloo, Portale in rovina, Portale della città antica, Casa lunga vichinga, Tempio del deserto, Tempio della giungla, Torre di Pisa (logge a colonne regolari).
 
 ### 🧰 Strumenti per i template
@@ -279,6 +296,7 @@ python tools/build_templates.py            # rigenera tutti i template e templat
 python tools/build_templates.py --list     # elenco per categoria
 python tools/validate_templates.py         # controllo di giocabilità (0 errori richiesti)
 python tools/render_templates.py --gallery # render isometrici in docs/ (richiede requirements-dev.txt)
+python tools/render_templates.py --cut=4 underground_hub  # spaccato delle strutture interrate
 python -m unittest discover -s tests -v    # test automatici
 ```
 

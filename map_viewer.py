@@ -1,3 +1,4 @@
+import math
 import os
 import threading
 import time
@@ -155,6 +156,7 @@ class MapViewer(QWidget):
     point_selected = pyqtSignal(int, int)              # grid x/z of a single click ("point" mode)
     game_structures_changed = pyqtSignal()             # a rendered tile brought new game structures
     polygon_finished = pyqtSignal(object, bool)        # grid points of a drawn perimeter, closed?
+    preview_edited = pyqtSignal(object)                # grid points of the perimeter/road after an edit
 
     MIN_ZOOM = 0.04
     MAX_ZOOM = 32.0
@@ -210,6 +212,10 @@ class MapViewer(QWidget):
         self.select_end = None
         self.poly_points = []        # perimeter being drawn ("polygon" mode), grid coordinates
         self.wall_preview = None     # {"points", "closed", "gates"} in grid coordinates
+        self.poly_closable = True    # False while drawing a road (open line)
+        self.snap_targets = []       # polylines (grid) the drawn points stick to (existing roads)
+        self.edit_drag = None        # index of the vertex being dragged ("edit_poly" mode)
+        self.magnet_point = None
 
         # UI Styling (Harmonious Premium Theme)
         self.grid_color = QColor(255, 255, 255, 20)
@@ -655,6 +661,7 @@ class MapViewer(QWidget):
                                f"{item['name']} (Y:{item['y_coord']}) - da iniettare", QColor(220, 220, 220), False,
                                max(rect.width() * z, 120)))
 
+        self.hint_text = None
         self._draw_wall_overlay(painter)
 
         # --- bridge / area selection overlays ---
@@ -709,7 +716,58 @@ class MapViewer(QWidget):
         self._draw_labels(painter, labels)
         self._draw_region_names(painter, transform, x1, x2, z1, z2)
         self._draw_hud(painter)
+        self._draw_hint(painter)
         self._draw_tooltip(painter)
+
+    def _draw_hint(self, painter):
+        """One line of help at the top of the map while drawing or editing a line."""
+        text = getattr(self, "hint_text", None)
+        if not text:
+            if self.mode == "polygon":
+                n = len(self.poly_points)
+                text = ("Clic per aggiungere punti (Shift = linea libera)  |  Backspace annulla l'ultimo  |  "
+                        + ("Invio o clic sul primo punto chiude, C chiude allineato, doppio clic = tratto aperto"
+                           if self.poly_closable else "Invio o doppio clic per finire")
+                        + ("" if n else "  |  Esc esce"))
+            elif self.mode == "edit_poly":
+                text = ("Modifica: trascina i punti azzurri  |  doppio clic su un tratto aggiunge un punto  |  "
+                        "clic destro su un punto lo toglie  |  Esc per finire")
+        if not text:
+            return
+        painter.setFont(QFont("Segoe UI", 9))
+        fm = QFontMetrics(painter.font())
+        w = fm.horizontalAdvance(text) + 20
+        rect = QRectF((self.width() - w) / 2, 8, w, 24)
+        painter.setBrush(QColor(12, 12, 16, 215))
+        painter.setPen(QPen(QColor(241, 196, 15, 180), 1))
+        painter.drawRoundedRect(rect, 6, 6)
+        painter.setPen(QColor(240, 240, 248))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _vertex_at(self, gx, gz):
+        if not self.wall_preview:
+            return None
+        thr = max(1.5, 8.0 / self.zoom_level)
+        best = None
+        for i, (x, z) in enumerate(self.wall_preview["points"]):
+            d = math.hypot(x - gx, z - gz)
+            if d <= thr and (best is None or d < best[0]):
+                best = (d, i)
+        return best[1] if best else None
+
+    def _segment_at(self, gx, gz):
+        pts = self.wall_preview["points"] if self.wall_preview else []
+        segs = list(zip(range(len(pts)), pts, pts[1:] + (pts[:1] if self.wall_preview.get("closed") else [])))
+        thr = max(1.5, 8.0 / self.zoom_level)
+        for i, (ax, az), (bx, bz) in segs:
+            dx, dz = bx - ax, bz - az
+            ln2 = dx * dx + dz * dz
+            if not ln2:
+                continue
+            t = max(0.0, min(1.0, ((gx - ax) * dx + (gz - az) * dz) / ln2))
+            if math.hypot(ax + t * dx - gx, az + t * dz - gz) <= thr:
+                return i + 1, (int(round(ax + t * dx)), int(round(az + t * dz)))
+        return None
 
     def _draw_labels(self, painter, labels):
         font = QFont("Segoe UI", 8)
@@ -818,8 +876,52 @@ class MapViewer(QWidget):
         """Bridges are straight: the second bank is aligned with the first on the main axis."""
         return (gx, sz) if abs(gx - sx) >= abs(gz - sz) else (sx, gz)
 
+    def magnet(self, gx, gz):
+        """Point of an existing road/line near (gx, gz): a vertex first, otherwise the nearest point."""
+        thr = max(2.0, 9.0 / self.zoom_level)
+        best = None
+        for line in self.snap_targets:
+            for (x, z) in line:
+                d = math.hypot(x - gx, z - gz)
+                if d <= thr and (best is None or d < best[0]):
+                    best = (d - 0.5, (x, z))
+            for (ax, az), (bx, bz) in zip(line, line[1:]):
+                dx, dz = bx - ax, bz - az
+                ln2 = dx * dx + dz * dz
+                if not ln2:
+                    continue
+                t = max(0.0, min(1.0, ((gx - ax) * dx + (gz - az) * dz) / ln2))
+                px, pz = ax + t * dx, az + t * dz
+                d = math.hypot(px - gx, pz - gz)
+                if d <= thr and (best is None or d < best[0]):
+                    best = (d, (int(round(px)), int(round(pz))))
+        return best[1] if best else None
+
+    @staticmethod
+    def aligned(a, b):
+        dx, dz = b[0] - a[0], b[1] - a[1]
+        return dx == 0 or dz == 0 or abs(dx) == abs(dz)
+
+    @staticmethod
+    def closing_corner(last, first):
+        """Corner to add so that last -> corner -> first are both at 0/45/90 degrees (None if not needed)."""
+        if MapViewer.aligned(last, first):
+            return None
+        (lx, lz), (fx, fz) = last, first
+        dx, dz = fx - lx, fz - lz
+        sx, sz = (1 if dx > 0 else -1), (1 if dz > 0 else -1)
+        d = min(abs(dx), abs(dz))
+        options = [(fx, lz), (lx, fz), (lx + sx * d, lz + sz * d), (fx - sx * d, fz - sz * d)]
+
+        def length(c):
+            return math.hypot(c[0] - lx, c[1] - lz) + math.hypot(fx - c[0], fz - c[1])
+        return min(options, key=length)
+
     def snapped_point(self, gx, gz, free=False):
-        """Next perimeter point: snapped to 0/45/90 degrees from the previous one unless free."""
+        """Next perimeter point: on an existing road nearby, else 0/45/90 degrees from the previous one."""
+        self.magnet_point = self.magnet(gx, gz) if not free else None
+        if self.magnet_point:
+            return self.magnet_point
         if not self.poly_points or free:
             return gx, gz
         px, pz = self.poly_points[-1]
@@ -849,9 +951,38 @@ class MapViewer(QWidget):
             gates = self.wall_preview.get("gates", [])
         if not pts:
             return
+        editing = self.mode == "edit_poly" and self.wall_preview
         poly = [QPointF(x + 0.5, zz + 0.5) for x, zz in pts]
         if closed:
             poly.append(poly[0])
+        # closing hint while drawing a perimeter: aligned or not, and the corner that would align it
+        if self.mode == "polygon" and self.poly_closable and len(self.poly_points) >= 2:
+            first, cur = self.poly_points[0], pts[-1]
+            dist = math.hypot(cur[0] - first[0], cur[1] - first[1])
+            if dist <= max(16, 60 / z):
+                fp = QPointF(first[0] + 0.5, first[1] + 0.5)
+                ok = self.aligned(cur, first)
+                colour = QColor(46, 204, 113, 230) if ok else QColor(230, 126, 34, 230)
+                painter.setPen(QPen(colour, 0, Qt.PenStyle.DashLine))
+                painter.drawLine(poly[-1], fp)
+                painter.drawEllipse(fp, max(2.0, 7 / z), max(2.0, 7 / z))
+                corner = self.closing_corner(cur, first)
+                if corner:
+                    cp = QPointF(corner[0] + 0.5, corner[1] + 0.5)
+                    painter.setPen(QPen(QColor(46, 204, 113, 200), 0, Qt.PenStyle.DotLine))
+                    painter.drawLine(poly[-1], cp)
+                    painter.drawLine(cp, fp)
+                    painter.setBrush(QColor(46, 204, 113, 200))
+                    painter.drawEllipse(cp, max(1.0, 3 / z), max(1.0, 3 / z))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    self.hint_text = (f"Chiusura NON allineata: premi C per chiudere con un angolo in "
+                                      f"X {self.anchor[0] * TILE + corner[0]}, Z {self.anchor[1] * TILE + corner[1]}")
+                else:
+                    self.hint_text = "Chiusura allineata: clicca sul primo punto (o premi Invio) per chiudere"
+        if self.magnet_point and self.mode == "polygon":
+            mp = QPointF(self.magnet_point[0] + 0.5, self.magnet_point[1] + 0.5)
+            painter.setPen(QPen(QColor(0, 229, 255, 240), 0))
+            painter.drawEllipse(mp, max(1.5, 6 / z), max(1.5, 6 / z))
         band = QPen(QColor(149, 165, 166, 150), 3.0)
         band.setCapStyle(Qt.PenCapStyle.RoundCap)
         band.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -861,8 +992,8 @@ class MapViewer(QWidget):
         painter.setPen(QPen(QColor(241, 196, 15, 240), 0, Qt.PenStyle.DashLine))
         for a, b2 in zip(poly, poly[1:]):
             painter.drawLine(a, b2)
-        r = max(1.0, 4 / z)
-        painter.setBrush(QColor(241, 196, 15, 230))
+        r = max(1.0, (6 if editing else 4) / z)
+        painter.setBrush(QColor(241, 196, 15, 230) if not editing else QColor(0, 229, 255, 230))
         for p in poly[:len(pts)]:
             painter.drawEllipse(p, r, r)
         painter.setBrush(QColor(231, 76, 60, 230))
@@ -908,7 +1039,22 @@ class MapViewer(QWidget):
                 self.poly_points.append(p)
             self.update()
         elif event.button() == Qt.MouseButton.RightButton and self.mode == "polygon":
-            self._finish_polygon(len(self.poly_points) >= 3)
+            self._finish_polygon(len(self.poly_points) >= 3 and self.poly_closable)
+        elif self.mode == "edit_poly" and self.wall_preview and event.button() == Qt.MouseButton.LeftButton:
+            idx = self._vertex_at(*self.screen_to_grid(event.position()))
+            if idx is not None:
+                self.edit_drag = idx
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            else:
+                self.is_panning = True
+                self.last_mouse_pos = event.position()
+        elif self.mode == "edit_poly" and self.wall_preview and event.button() == Qt.MouseButton.RightButton:
+            idx = self._vertex_at(*self.screen_to_grid(event.position()))
+            pts = self.wall_preview["points"]
+            if idx is not None and len(pts) > (3 if self.wall_preview.get("closed") else 2):
+                pts.pop(idx)
+                self.preview_edited.emit(list(pts))
+                self.update()
         elif event.button() == Qt.MouseButton.LeftButton and self.mode == "point" and has_map:
             self.point_selected.emit(*self.screen_to_grid(event.position()))
         elif event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and has_map:
@@ -955,6 +1101,13 @@ class MapViewer(QWidget):
         if self.mode == "polygon" and event.button() == Qt.MouseButton.LeftButton:
             self._finish_polygon(False)
             return
+        if self.mode == "edit_poly" and self.wall_preview and event.button() == Qt.MouseButton.LeftButton:
+            hit = self._segment_at(*self.screen_to_grid(event.position()))
+            if hit:
+                self.wall_preview["points"].insert(hit[0], hit[1])
+                self.preview_edited.emit(list(self.wall_preview["points"]))
+                self.update()
+            return
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -964,6 +1117,12 @@ class MapViewer(QWidget):
             self.update()
             if abs(x2 - x1) >= 1 and abs(z2 - z1) >= 1:
                 self.area_selected.emit(min(x1, x2), min(z1, z2), max(x1, x2), max(z1, z2))
+            return
+        if self.edit_drag is not None and event.button() == Qt.MouseButton.LeftButton:
+            self.edit_drag = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.preview_edited.emit(list(self.wall_preview["points"]))
+            self.update()
             return
         if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
             if self.is_dragging_structure:
@@ -992,6 +1151,13 @@ class MapViewer(QWidget):
             self.update()
             return
         if self.mode in ("bridge", "point", "polygon"):
+            self.trigger_hover_event(grid_x, grid_z)
+            self.update()
+            return
+        if self.mode == "edit_poly":
+            if self.edit_drag is not None and self.wall_preview:
+                p = self.magnet(grid_x, grid_z) or (grid_x, grid_z)
+                self.wall_preview["points"][self.edit_drag] = p
             self.trigger_hover_event(grid_x, grid_z)
             self.update()
             return
@@ -1044,7 +1210,13 @@ class MapViewer(QWidget):
         if self.mode == "polygon":
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._finish_polygon(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier) is False
-                                     and len(self.poly_points) >= 3)
+                                     and len(self.poly_points) >= 3 and self.poly_closable)
+                return
+            if key == Qt.Key.Key_C and self.poly_closable and len(self.poly_points) >= 2:
+                corner = self.closing_corner(self.poly_points[-1], self.poly_points[0])
+                if corner and corner not in self.poly_points:
+                    self.poly_points.append(corner)
+                self._finish_polygon(len(self.poly_points) >= 3)
                 return
             if key == Qt.Key.Key_Backspace and self.poly_points:
                 self.poly_points.pop()

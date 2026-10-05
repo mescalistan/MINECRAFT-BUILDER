@@ -411,6 +411,12 @@ class CatalogTests(unittest.TestCase):
         import catalog
         entries = catalog.load_catalog(TEMPLATES)
         self.assertEqual(len(entries), len([f for f in os.listdir(TEMPLATES) if f.endswith(".nbt")]))
+        # the built-in library only (downloads and cuts of the user may legitimately be "Altro")
+        import json
+        with open(os.path.join(TEMPLATES, "catalog.json"), encoding="utf-8") as f:
+            builtin = {e["file"] for e in json.load(f)} | {f"{n}.nbt" for n in catalog.ORIGINALS}
+        entries = [e for e in entries if e["file"] in builtin]
+        self.assertEqual(catalog.category_for("crop_farm_(mixed)"), "Fattorie e animali")
         self.assertTrue(all(e["category"] in catalog.CATEGORIES and e["category"] != "Altro" for e in entries),
                         [e["file"] for e in entries if e["category"] == "Altro"])
         self.assertEqual({e["file"] for e in entries if e["category"] == "Ponti"},

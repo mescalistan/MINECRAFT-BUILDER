@@ -335,6 +335,9 @@ class InjectionWorker(QThread):
                     f"Avviso: {stats['skipped_missing']} blocchi saltati in {len(self.world.skipped_chunks)} chunk "
                     f"({', '.join(reasons)}). Esplora l'area in gioco e riprova."
                 )
+            if stats.get("entities") or stats.get("block_data"):
+                self.progress.emit(f"Entita' aggiunte: {stats.get('entities', 0)}, contenitori riempiti: "
+                                   f"{stats.get('block_data', 0)}.")
             if stats["skipped_modded"]:
                 self.progress.emit(f"Avviso: {stats['skipped_modded']} blocchi di mod saltati.")
             if stats["skipped_height"]:
@@ -887,6 +890,13 @@ class MinecraftBuilderApp(QMainWindow):
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self.apply_structure_to_world)
         inspector_layout.addWidget(self.apply_btn)
+
+        self.undo_btn = QPushButton("Annulla ultima iniezione")
+        self.undo_btn.setToolTip("Rimette le regioni del mondo com'erano prima dell'ultima iniezione, usando i backup "
+                                 "creati automaticamente. Si puo' ripetere per annullare anche le precedenti.")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self.undo_last_injection)
+        inspector_layout.addWidget(self.undo_btn)
         
         # Console output
         log_lbl = QLabel("Registro Operazioni:")
@@ -1067,6 +1077,7 @@ class MinecraftBuilderApp(QMainWindow):
             self.terrain = None
             self.map_viewer.set_region(self.current_region)
             self.refresh_placed_structures()
+            self.update_undo_button()
             self.log(f"Regione {region_file} caricata correttamente! (r.{self.current_region.rx}.{self.current_region.rz})")
             
             # Load player coordinates from world saves
@@ -1609,6 +1620,96 @@ class MinecraftBuilderApp(QMainWindow):
         except (OSError, ValueError, TypeError):
             return []
         return data.get("bridges", {}).get(self.current_dimension_id(), [])
+
+    # ---- Undo ----
+    def _read_registry(self):
+        try:
+            with open(self.bridges_file(), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _write_registry(self, data):
+        with open(self.bridges_file(), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+
+    def _registry_sizes(self):
+        data = self._read_registry()
+        dim = self.current_dimension_id()
+        return {"bridges": len(data.get("bridges", {}).get(dim, [])),
+                "structures": len(data.get("structures", {}).get(dim, []))}
+
+    def push_undo(self, backups, before, names):
+        """Remembers the backups of an injection (in the world folder, so undo works after a restart)."""
+        if not backups or not self.bridges_file():
+            self.update_undo_button()
+            return
+        data = self._read_registry()
+        labels = [os.path.splitext(n)[0] for n in names if n and n != "lampione"]
+        label = ", ".join(sorted(set(labels))[:4]) + ("..." if len(set(labels)) > 4 else "")
+        data.setdefault("history", []).append({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), "dimension": self.current_dimension_id(),
+            "label": label or "iniezione", "backups": [[r, b] for r, b in backups], "before": before})
+        data["history"] = data["history"][-20:]
+        try:
+            self._write_registry(data)
+        except OSError as e:
+            self.log(f"Avviso: impossibile salvare la cronologia per l'annullamento: {e}")
+        self.update_undo_button()
+
+    def update_undo_button(self):
+        if not hasattr(self, "undo_btn"):
+            return
+        history = self._read_registry().get("history", []) if self.current_world_path else []
+        last = history[-1] if history else None
+        self.undo_btn.setEnabled(bool(last) and getattr(self, "injection_thread", None) is None)
+        self.undo_btn.setText(f"Annulla ultima iniezione ({last['time'][11:16]})" if last else
+                              "Annulla ultima iniezione")
+
+    def undo_last_injection(self):
+        data = self._read_registry()
+        history = data.get("history", [])
+        if not history:
+            self.log("Non c'e' nessuna iniezione da annullare.")
+            return
+        last = history[-1]
+        missing = [b for _, b in last["backups"] if b and not os.path.exists(b)]
+        if missing:
+            QMessageBox.warning(self, "Annulla", "I backup di questa iniezione non ci sono piu': impossibile annullarla.")
+            history.pop()
+            self._write_registry(data)
+            self.update_undo_button()
+            return
+        regions = [os.path.basename(r) for r, _ in last["backups"]]
+        msg = (f"Annullare l'iniezione del {last['time']} ({last['label']})?\n\n"
+               f"Le regioni {', '.join(regions)} torneranno com'erano prima. Anche quello che hai costruito "
+               f"in gioco in queste regioni dopo l'iniezione verra' perso.")
+        if is_minecraft_running() or self.check_world_locked():
+            msg += "\n\nAttenzione: Minecraft sembra aperto. Chiudi il mondo prima di continuare."
+        if QMessageBox.question(self, "Annulla ultima iniezione", msg) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for region, backup in last["backups"]:
+                if backup:
+                    shutil.copy2(backup, region)
+                elif os.path.exists(region):
+                    os.remove(region)          # file created by the injection (entities)
+        except OSError as e:
+            QMessageBox.critical(self, "Annulla", f"Impossibile ripristinare le regioni: {e}")
+            return
+        dim = last.get("dimension", self.current_dimension_id())
+        before = last.get("before", {})
+        for key in ("bridges", "structures"):
+            lst = data.get(key, {}).get(dim)
+            if lst is not None and key in before:
+                del lst[before[key]:]
+        history.pop()
+        self._write_registry(data)
+        self.log(f"Iniezione del {last['time']} annullata: ripristinate {len(regions)} regioni dai backup.")
+        self.region_changed()
+        self.map_viewer.invalidate()
+        self.refresh_placed_structures()
+        self.update_undo_button()
 
     def record_bridges(self, items):
         bridges = [i["bridge"] for i in items if i.get("bridge")]
@@ -2187,6 +2288,19 @@ class MinecraftBuilderApp(QMainWindow):
             self.log("Struttura ruotata di 90° in senso orario.")
             self.update_structure_info()
 
+    def check_world_locked(self):
+        """True if Minecraft has the world open (its session.lock cannot be written)."""
+        if not self.current_world_path:
+            return False
+        lock_path = os.path.join(self.current_world_path, "session.lock")
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r+"):
+                    pass
+            except IOError:
+                return True
+        return False
+
     def apply_structure_to_world(self):
         if not self.current_region:
             return
@@ -2289,8 +2403,12 @@ class MinecraftBuilderApp(QMainWindow):
     def on_injection_success(self):
         self.log("Tutte le strutture sono state iniettate con successo!")
         self.terrain = None
+        before = self._registry_sizes()
         self.record_bridges(getattr(self, "last_injected", None) or [])
         self.record_structures(getattr(self, "last_injected", None) or [])
+        world = getattr(self.injection_thread, "world", None)
+        self.push_undo(getattr(world, "last_backups", []), before,
+                       [i.get("name", "") for i in (getattr(self, "last_injected", None) or []) if "structure" in i])
         
         # Clear queue after successful write
         if self.staged_placements:
@@ -2354,10 +2472,12 @@ class MinecraftBuilderApp(QMainWindow):
     def on_injection_finished(self):
         self.map_viewer.pause_loading(False)
         QApplication.restoreOverrideCursor()
+        QApplication.processEvents()
         self.check_injection_readiness()
         self.update_player_info_display()
         # Clean up thread
         self.injection_thread = None
+        self.update_undo_button()
 
     def closeEvent(self, event):
         self.map_viewer.shutdown()

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from fake_world import make_region, make_chunk, GROUND_Y
-from redstone_sim import Sim, ToggleSim
+from redstone_sim import Sim, LeverSim
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
@@ -67,46 +67,47 @@ class DrawbridgeCircuitTests(unittest.TestCase):
             s = walls.build_gate("medievale", gate, lights=True).to_structure()
             names = [b["Name"] for b in s.blocks.values()]
             self.assertIn("minecraft:daylight_detector", names)
-            self.assertGreaterEqual(names.count("minecraft:redstone_lamp"), 9)
-            self.assertEqual("minecraft:sticky_piston" in names, gate == "levatoio")
-            self.assertEqual("minecraft:spruce_fence_gate" in names, gate == "portone")
+            # the portcullis has no motion-sensor lamps: they would be too close to its wiring
+            self.assertGreaterEqual(names.count("minecraft:redstone_lamp"), 1 if gate == "portone" else 9)
+            self.assertEqual("minecraft:sticky_piston" in names, gate in ("levatoio", "portone"))
+            self.assertEqual(names.count("minecraft:iron_bars") >= 5, gate == "portone")   # the portcullis
             self.assertEqual(names_ok(s), [])
 
 
 class LeverToggleTests(unittest.TestCase):
     def test_each_lever_toggles_the_gate(self):
-        for gate, count in (("portone", "fence_gate"), ("levatoio", "sticky_piston")):
+        """Two levers (inside and hidden outside) work like the switches of a staircase light."""
+        for gate, moving in (("portone", 10), ("levatoio", 6)):
             b = walls.build_gate("medievale", gate, lights=True)
             b.finalize()
-            sim = ToggleSim(b.cells)
-            sim.settle()
-            observers = sorted(p for p, (n, _) in sim.cells.items() if n == "observer")
-            levers = [p for p, (n, _) in sim.cells.items() if n == "lever"]
-            self.assertEqual(len(observers), 2)
-            self.assertEqual(sorted((x, y - 1, z) for x, y, z in levers), observers)  # each lever on its observer
-            parts = [p for p, (n, _) in sim.cells.items() if n.endswith(count)]
-
-            def opened():
-                if gate == "portone":
-                    return sum(sim.gate_open(g) for g in parts)
-                return sum(sim.piston_on(p) for p in parts)
-
-            start = opened()
-            self.assertEqual(start, 3 if gate == "portone" else 0)
-            expected = start
-            for o in (observers[0], observers[1], observers[1], observers[0], observers[1]):
-                sim.flip(o)
-                expected = (3 - expected) if gate == "portone" else (6 - expected)
-                self.assertEqual(opened(), expected, f"{gate}: flipping {o}")
+            sim = LeverSim(b.cells)
+            levers = sorted(sim.levers)
+            self.assertEqual(len(levers), 2)
+            pistons = [p for p, (n, _) in sim.cells.items() if n == "sticky_piston"]
+            self.assertEqual(len(pistons), moving)
+            for state in ((False, False), (True, False), (True, True), (False, True), (False, False)):
+                for lever, on in zip(levers, state):
+                    sim.levers[lever] = on
+                self.assertTrue(sim.settle(400))
+                expected = moving if state[0] != state[1] else 0
+                self.assertEqual(sum(sim.piston_on(p) for p in pistons), expected, f"{gate} {state}")
             self.assertEqual(names_ok(b.to_structure()), [])
+
+    def test_inner_lever_is_on_the_gatehouse_wall(self):
+        b = walls.build_gate("medievale", "portone")
+        lever = [(x - walls.GATE_OX, y - walls.GATE_H, z - walls.GATE_OZ, p) for (x, y, z), (n, p) in b.cells.items()
+                 if n == "minecraft:lever" and p["face"] == "wall"]
+        self.assertEqual(len(lever), 1)
+        x, y, z, props = lever[0]
+        self.assertEqual((y, z, props["facing"]), (2, 4, "south"))   # on the inner face, at chest height
 
 
 class WallPlanTests(unittest.TestCase):
     def test_gate_on_slanted_wall_gets_a_straight_stretch(self):
         pts = [(0, 0), (60, 60), (60, 100), (0, 100)]
         plan = walls.plan_walls(pts, True, "medievale", 9, FlatTerrain(), gates=[(30, 30)], gate_type="arco")
-        self.assertIn((21, 30), plan["points"])
-        self.assertIn((39, 30), plan["points"])
+        self.assertIn((20, 30), plan["points"])
+        self.assertIn((40, 30), plan["points"])
         self.assertEqual(plan["gates"], [(30, 30, "north")])
 
     def test_closed_perimeter_with_gate(self):

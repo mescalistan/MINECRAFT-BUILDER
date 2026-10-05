@@ -274,3 +274,360 @@ class ToggleSim(Sim):
             if self.strongly_powered(q) or (self.name(q) == "redstone_torch" and self.torches.get(q)):
                 return True
         return False
+
+
+class LeverSim(Sim):
+    """
+    Sim with levers (switched by the test) and comparators (compare / subtract), for the gates
+    opened by two levers. Levers strongly power the block they are attached to and power the
+    dust next to them.
+    """
+
+    def __init__(self, cells):
+        super().__init__(cells)
+        self.levers = {p: False for p, (n, _) in self.cells.items() if n == "lever"}
+        self.comp = {p: 0 for p, (n, _) in self.cells.items() if n == "comparator"}
+
+    def solid(self, p):
+        n = self.name(p)
+        if n in ("comparator", "repeater", "redstone_wire", "lever", "sticky_piston", "iron_bars"):
+            return False
+        return super().solid(p)
+
+    def lever_support(self, p):
+        props = self.cells[p][1]
+        face = props.get("face", "wall")
+        if face == "floor":
+            return (p[0], p[1] - 1, p[2])
+        if face == "ceiling":
+            return (p[0], p[1] + 1, p[2])
+        dx, dz = DIRS[props.get("facing", "north")]
+        return (p[0] - dx, p[1], p[2] - dz)
+
+    def strongly_powered(self, p):
+        if not self.solid(p):
+            return False
+        if super().strongly_powered(p):
+            return True
+        for lv, on in self.levers.items():
+            if on and self.lever_support(lv) == p:
+                return True
+        for c, v in self.comp.items():
+            if v > 0 and self.rep_output_target(c) == p:
+                return True
+        return False
+
+    def _side_cells(self, p):
+        facing = self.cells[p][1]["facing"]
+        if facing in ("north", "south"):
+            return [(p[0] + 1, p[1], p[2]), (p[0] - 1, p[1], p[2])]
+        return [(p[0], p[1], p[2] + 1), (p[0], p[1], p[2] - 1)]
+
+    def _signal_into(self, q, target):
+        """Power that cell q sends into the diode at target (dust level, repeater/comparator output)."""
+        n = self.name(q)
+        if q in self.dust:
+            return self.dust[q]
+        if n == "repeater" and self.rep[q] and self.rep_output_target(q) == target:
+            return 15
+        if n == "comparator" and self.rep_output_target(q) == target:
+            return self.comp[q]
+        if n == "lever" and self.levers[q]:
+            return 15
+        if self.solid(q) and self.strongly_powered(q):
+            return 15
+        return 0
+
+    def step(self):
+        changed = False
+        new = {}
+        for p in self.dust:
+            x, y, z = p
+            power = 0
+            for d, (dx, dz) in DIRS.items():
+                q = (x + dx, y, z + dz)
+                n = self.name(q)
+                if n == "repeater" and self.rep[q] and self.rep_output_target(q) == p:
+                    power = 15
+                if n == "comparator" and self.rep_output_target(q) == p:
+                    power = max(power, self.comp[q])
+                if n == "lever" and self.levers[q]:
+                    power = 15
+                if n in ("sculk_sensor", "daylight_detector") and q in self.on_sources:
+                    power = 15
+                if self.solid(q) and self.strongly_powered(q):
+                    power = 15
+            for q in ((x, y - 1, z), (x, y + 1, z)):
+                if self.solid(q) and self.strongly_powered(q):
+                    power = 15
+            for q in self.dust_links(p):
+                power = max(power, self.dust[q] - 1)
+            new[p] = power
+        if new != self.dust:
+            changed = True
+            self.dust = new
+        for p in self.rep:
+            on = self._signal_into(self.rep_input_pos(p), p) > 0
+            if on != self.rep[p]:
+                self.rep[p] = on
+                changed = True
+        for p in self.comp:
+            rear = self._signal_into(self.rep_input_pos(p), p)
+            side = max(self._signal_into(q, p) for q in self._side_cells(p))
+            if self.cells[p][1].get("mode") == "subtract":
+                out = max(0, rear - side)
+            else:
+                out = rear if rear >= side else 0
+            if out != self.comp[p]:
+                self.comp[p] = out
+                changed = True
+        return changed
+
+
+# ---------------------------------------------------------------------------
+# Analog simulator: comparators reading containers, torches (standing and wall), levers,
+# daylight detectors, pistons (with quasi-connectivity) and hopper locking.
+# ---------------------------------------------------------------------------
+
+CONTAINER_SLOTS = {"hopper": 5, "dropper": 9, "dispenser": 9, "chest": 27, "trapped_chest": 27, "barrel": 27}
+NOT_CONDUCTORS = ("piston", "sticky_piston", "observer", "daylight_detector", "comparator", "repeater",
+                  "redstone_wire", "lever", "redstone_torch", "redstone_wall_torch", "hopper", "redstone_lamp")
+ALL6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
+
+
+def stack_size(item):
+    item = _short(item)
+    if item in ("ender_pearl", "snowball", "egg", "honey_bottle", "armor_stand", "bucket") or \
+            item.endswith(("_sign", "_banner")):
+        return 16
+    if item.endswith(("_sword", "_pickaxe", "_axe", "_shovel", "_hoe", "_helmet", "_chestplate",
+                      "_leggings", "_boots", "potion", "_bed", "shulker_box", "bow", "trident")):
+        return 1
+    return 64
+
+
+def container_signal(name, items):
+    """Comparator output reading a container: floor(1 + 14 * fullness), 0 if empty (Java formula)."""
+    if not items:
+        return 0
+    slots = CONTAINER_SLOTS.get(_short(name), 27)
+    fullness = sum(count / stack_size(item) for item, count in items) / slots
+    return int(1 + 14 * fullness)
+
+
+class AnalogSim:
+    """
+    Steady state of a circuit with analog signals. cells: Builder.cells; contents: {pos: [(item, count)]};
+    daylight: {pos: power} of the daylight detectors; levers: {pos: bool} overrides the lever states.
+    Iterates (dust relaxation, comparators, torches) until nothing changes; raises on oscillation.
+    """
+
+    def __init__(self, cells, contents=None, daylight=None, levers=None):
+        self.cells = {p: (_short(n), dict(pr)) for p, (n, pr) in cells.items()}
+        self.contents = {p: list(v) for p, v in (contents or {}).items()}
+        self.daylight = dict(daylight or {})
+        self.levers = {p: pr.get("powered") == "true" for p, (n, pr) in self.cells.items() if n == "lever"}
+        self.levers.update(levers or {})
+        self.dust = {p: 0 for p, (n, _) in self.cells.items() if n == "redstone_wire"}
+        self.comp = {p: 0 for p, (n, _) in self.cells.items() if n == "comparator"}
+        self.torch = {p: pr.get("lit", "true") == "true" for p, (n, pr) in self.cells.items()
+                      if n in ("redstone_torch", "redstone_wall_torch")}
+
+    # ---- geometry ----
+    def name(self, p):
+        return self.cells.get(p, (None, {}))[0]
+
+    def props(self, p):
+        return self.cells.get(p, (None, {}))[1]
+
+    def conductor(self, p):
+        n = self.name(p)
+        return (n is not None and bi.is_full_solid(n) and not bi.is_transparent_full(n)
+                and n not in NOT_CONDUCTORS and n not in CONTAINER_SLOTS)
+
+    def torch_attached(self, t):
+        if self.name(t) == "redstone_wall_torch":
+            dx, dz = DIRS[OPP[self.props(t)["facing"]]]
+            return (t[0] + dx, t[1], t[2] + dz)
+        return (t[0], t[1] - 1, t[2])
+
+    def lever_attached(self, lv):
+        pr = self.props(lv)
+        face = pr.get("face", "wall")
+        if face == "floor":
+            return (lv[0], lv[1] - 1, lv[2])
+        if face == "ceiling":
+            return (lv[0], lv[1] + 1, lv[2])
+        dx, dz = DIRS[OPP[pr["facing"]]]
+        return (lv[0] + dx, lv[1], lv[2] + dz)
+
+    def diode_out(self, p):
+        """Cell a comparator outputs into (its 'facing' is the input side)."""
+        dx, dz = DIRS[OPP[self.props(p)["facing"]]]
+        return (p[0] + dx, p[1], p[2] + dz)
+
+    def dust_points_into(self, d, q):
+        """Dust d powers the block below it and the horizontal neighbour its shape points to."""
+        if q == (d[0], d[1] - 1, d[2]):
+            return True
+        for side, (dx, dz) in DIRS.items():
+            if (d[0] + dx, d[1], d[2] + dz) == q:
+                return self.props(d).get(side, "none") != "none"
+        return False
+
+    # ---- power ----
+    def strong(self, b):
+        """Strong power of a conductor block (it can power dust next to it)."""
+        if not self.conductor(b):
+            return 0
+        best = 0
+        for dx, dy, dz in ALL6:
+            q = (b[0] + dx, b[1] + dy, b[2] + dz)
+            n = self.name(q)
+            if n == "lever" and self.levers.get(q) and self.lever_attached(q) == b:
+                best = 15
+            elif n in ("redstone_torch", "redstone_wall_torch") and self.torch.get(q) \
+                    and q == (b[0], b[1] - 1, b[2]):
+                best = 15                         # a torch strongly powers the block above it
+            elif n == "comparator" and self.diode_out(q) == b:
+                best = max(best, self.comp[q])
+        return best
+
+    def weak(self, b):
+        """Power from dust on top of or pointing into the conductor block b."""
+        if not self.conductor(b):
+            return 0
+        best = 0
+        for dx, dy, dz in ALL6:
+            q = (b[0] + dx, b[1] + dy, b[2] + dz)
+            if q in self.dust and self.dust[q] > 0 and dy >= 0 and self.dust_points_into(q, b):
+                best = max(best, self.dust[q])
+        return best
+
+    def block_power(self, b):
+        return max(self.strong(b), self.weak(b))
+
+    def source_into(self, q, target):
+        """Power a non-dust neighbour q sends to the component or dust at 'target'."""
+        n = self.name(q)
+        if n == "lever":
+            return 15 if self.levers.get(q) else 0
+        if n in ("redstone_torch", "redstone_wall_torch"):
+            return 15 if self.torch.get(q) and self.torch_attached(q) != target else 0
+        if n == "daylight_detector":
+            return self.daylight.get(q, 0)
+        if n == "comparator":
+            return self.comp[q] if self.diode_out(q) == target else 0
+        return 0
+
+    def component_power(self, c, exclude=None):
+        """Power reaching a mechanism at c (piston, hopper, lamp). exclude: a cell to ignore (QC)."""
+        best = 0
+        for dx, dy, dz in ALL6:
+            q = (c[0] + dx, c[1] + dy, c[2] + dz)
+            if q == exclude:
+                continue
+            if q in self.dust:
+                if self.dust[q] > 0 and (dy == 1 or (dy == 0 and self.dust_points_into(q, c))):
+                    best = max(best, self.dust[q])
+                continue
+            best = max(best, self.source_into(q, c))
+            if self.conductor(q):
+                best = max(best, self.block_power(q))
+        return best
+
+    def piston_on(self, p):
+        if self.component_power(p) > 0:
+            return True
+        above = (p[0], p[1] + 1, p[2])
+        return self.component_power(above, exclude=p) > 0      # quasi-connectivity
+
+    def hopper_locked(self, p):
+        return self.component_power(p) > 0
+
+    # ---- relaxation ----
+    def _dust_sources(self, d):
+        best = 0
+        for dx, dy, dz in ALL6:
+            q = (d[0] + dx, d[1] + dy, d[2] + dz)
+            if q in self.dust:
+                continue
+            best = max(best, self.source_into(q, d))
+            if self.conductor(q):
+                best = max(best, self.strong(q))
+        return best
+
+    def _dust_links(self, d):
+        x, y, z = d
+        out = []
+        for side, (dx, dz) in DIRS.items():
+            if self.props(d).get(side, "none") == "none":
+                continue
+            for q, between in (((x + dx, y, z + dz), None),
+                               ((x + dx, y + 1, z + dz), (x, y + 1, z)),
+                               ((x + dx, y - 1, z + dz), (x + dx, y, z + dz))):
+                if q in self.dust and (between is None or not self.conductor(between)):
+                    out.append(q)
+        return out
+
+    def _relax_dust(self):
+        src = {d: self._dust_sources(d) for d in self.dust}
+        links = {d: self._dust_links(d) for d in self.dust}
+        power = {d: 0 for d in self.dust}
+        changed = True
+        while changed:
+            changed = False
+            for d in self.dust:
+                v = max([src[d]] + [power[q] - 1 for q in links[d]])
+                if v > power[d]:
+                    power[d] = v
+                    changed = True
+        return power
+
+    def comparator_rear(self, c):
+        dx, dz = DIRS[self.props(c)["facing"]]
+        q = (c[0] + dx, c[1], c[2] + dz)
+        n = self.name(q)
+        if n in CONTAINER_SLOTS:
+            return container_signal(n, self.contents.get(q))
+        if q in self.dust:
+            return self.dust[q]
+        return max(self.source_into(q, c), self.block_power(q) if self.conductor(q) else 0)
+
+    def comparator_side(self, c):
+        fx, fz = DIRS[self.props(c)["facing"]]
+        best = 0
+        for dx, dz in ((fz, fx), (-fz, -fx)):
+            q = (c[0] + dx, c[1], c[2] + dz)
+            if q in self.dust and self.dust_points_into(q, c):
+                best = max(best, self.dust[q])
+            elif self.name(q) == "comparator" and self.diode_out(q) == c:
+                best = max(best, self.comp[q])
+        return best
+
+    def settle(self, max_steps=100):
+        seen = []
+        for _ in range(max_steps):
+            self.dust = self._relax_dust()
+            changed = False
+            for c in self.comp:
+                rear, side = self.comparator_rear(c), self.comparator_side(c)
+                if self.props(c).get("mode") == "subtract":
+                    out = max(0, rear - side)
+                else:
+                    out = rear if rear >= side else 0
+                if out != self.comp[c]:
+                    self.comp[c] = out
+                    changed = True
+            for t in self.torch:
+                lit = self.block_power(self.torch_attached(t)) == 0
+                if lit != self.torch[t]:
+                    self.torch[t] = lit
+                    changed = True
+            if not changed:
+                return self
+            state = (tuple(sorted(self.torch.items())), tuple(sorted(self.comp.items())))
+            if state in seen:
+                raise RuntimeError("il circuito oscilla (clock non previsto)")
+            seen.append(state)
+        raise RuntimeError("il circuito non si stabilizza")

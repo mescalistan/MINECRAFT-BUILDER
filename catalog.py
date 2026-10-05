@@ -14,7 +14,7 @@ USER_CATALOG = os.path.join(TEMPLATES_DIR, "user_catalog.json")
 
 CATEGORIES = [
     "Case", "Castelli e fortezze", "Torri", "Ponti", "Monumenti", "Templi e luoghi sacri",
-    "Fattorie e animali", "Piazze e decorazioni", "Utilità e magia", "Navi", "Rovine e portali",
+    "Fattorie e animali", "Farm automatiche", "Hub e magazzini", "Piazze e decorazioni", "Utilità e magia", "Navi", "Rovine e portali",
     "Fantascienza", "Ritagli", "Altro",
 ]
 
@@ -70,6 +70,8 @@ CATEGORY_OF = {
     "stave_church": "Templi e luoghi sacri", "chinese_pavilion": "Piazze e decorazioni",
     "cherry_temple": "Templi e luoghi sacri", "kinkaku_ji": "Templi e luoghi sacri",
     "neuschwanstein": "Castelli e fortezze",
+    # Moduli tecnici (docs/PROMPT_ARCHITETTO.md)
+    "underground_hub": "Hub e magazzini", "iron_farm": "Farm automatiche",
 }
 
 # Strutture originali del repository (non generate dagli script)
@@ -96,8 +98,33 @@ BRIDGE_STYLE_OF = {
 }
 
 
+_GUESS = [
+    (("iron_farm", "golem", "mob_farm", "xp_farm", "gold_farm", "raid_farm", "auto_farm"), "Farm automatiche"),
+    (("hub", "storage", "magazzin", "sorter", "smistat"), "Hub e magazzini"),
+    (("bridge", "ponte"), "Ponti"),
+    (("castle", "castello", "fort", "keep", "citadel", "gate"), "Castelli e fortezze"),
+    (("tower", "torre", "lighthouse", "faro", "spire"), "Torri"),
+    (("farm", "fattoria", "barn", "stable", "pen", "coop", "silo", "crop", "field"), "Fattorie e animali"),
+    (("temple", "tempio", "church", "chiesa", "chapel", "cathedral", "shrine", "pagoda", "mosque"),
+     "Templi e luoghi sacri"),
+    (("house", "casa", "home", "cottage", "hut", "cabin", "villa", "mansion", "shack", "inn", "tavern"), "Case"),
+    (("ship", "boat", "nave", "barca"), "Navi"),
+    (("portal", "portale", "ruin", "rovina"), "Rovine e portali"),
+    (("fountain", "well", "statue", "garden", "plaza", "market", "fontana", "piazza"), "Piazze e decorazioni"),
+    (("monument", "pyramid", "arch", "colosseum", "monumento"), "Monumenti"),
+    (("space", "rocket", "station", "sci"), "Fantascienza"),
+]
+
+
 def category_for(name):
-    return CATEGORY_OF.get(name, "Altro")
+    """Italian category of a structure: known templates, otherwise guessed from the file name."""
+    if name in CATEGORY_OF:
+        return CATEGORY_OF[name]
+    low = name.lower()
+    for words, category in _GUESS:
+        if any(w in low for w in words):
+            return category
+    return "Altro"
 
 
 def _load_json(path):

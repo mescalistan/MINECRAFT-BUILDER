@@ -14,6 +14,12 @@ class Structure:
         self.data_version = data_version
         # Layers of the structure below the original ground (cut areas with basements)
         self.ground_offset = 0
+        # Block entity data to write with the blocks (container contents...): (x, y, z) -> compound
+        self.block_nbt = {}
+        # Entities (villagers, mobs...): [{"pos": (x, y, z) floats, "nbt": compound with "id"}]
+        self.entities = []
+        # Sealed technical areas (x1, y1, z1, x2, y2, z2) declared by the templates (validator only)
+        self.technical = []
 
     def modded_blocks(self):
         """Counts blocks that do not belong to the minecraft: namespace, per namespace."""
@@ -77,6 +83,20 @@ class Structure:
             
         rotated = Structure(new_w, new_h, new_l, new_blocks, self.data_version)
         rotated.ground_offset = self.ground_offset
+        for (x, y, z), data in self.block_nbt.items():
+            rx, rz, l = x, z, self.length
+            for i in range(steps):
+                rx, rz = l - 1 - rz, rx
+                l = self.width if i % 2 == 0 else self.length
+            rotated.block_nbt[(rx, y, rz)] = data
+        for ent in self.entities:
+            ex, ey, ez = ent["pos"]
+            l = self.length
+            for i in range(steps):
+                ex, ez = l - ez, ex
+                l = self.width if i % 2 == 0 else self.length
+            rotated.entities.append({"pos": (ex, ey, ez), "nbt": ent["nbt"],
+                                     "yaw": (ent.get("yaw", 0.0) + 90.0 * steps) % 360.0})
         for attr in ("bridge",):
             if hasattr(self, attr):
                 setattr(rotated, attr, dict(getattr(self, attr)))
@@ -100,7 +120,8 @@ class Structure:
         """Loads native Minecraft Structure NBT format (fast path, fine for millions of blocks)."""
         from nbt_codec import parse_structure_bytes, _maybe_decompress
         with open(file_path, "rb") as f:
-            tag, block_list = parse_structure_bytes(_maybe_decompress(f.read()))
+            block_nbt = {}
+            tag, block_list = parse_structure_bytes(_maybe_decompress(f.read()), block_nbt)
         if not tag:
             raise ValueError("Empty or invalid NBT file")
         size_list = tag.get("size", [])
@@ -124,6 +145,18 @@ class Structure:
         struct = cls(w, h, l, blocks, int(dv) if dv is not None else None)
         meta = tag.get("MinecraftBuilder") or {}
         struct.ground_offset = int(meta.get("groundOffset", 0))
+        struct.block_nbt = block_nbt
+        struct.technical = [tuple(int(v) for v in box) for box in meta.get("technical", []) or [] if len(box) == 6]
+        for ent in tag.get("entities", []) or []:
+            pos = ent.get("pos") or ent.get("blockPos")
+            nbt = ent.get("nbt")
+            if pos is None or len(pos) < 3 or not nbt or "id" not in nbt:
+                continue
+            yaw = 0.0
+            rot = nbt.get("Rotation")
+            if rot:
+                yaw = float(rot[0])
+            struct.entities.append({"pos": tuple(float(v) for v in pos[:3]), "nbt": nbt, "yaw": yaw})
         return struct
 
     @classmethod

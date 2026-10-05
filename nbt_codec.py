@@ -152,11 +152,12 @@ def parse_nbt_bytes(data):
     return val, str(name)
 
 
-def parse_structure_bytes(data):
+def parse_structure_bytes(data, block_nbt=None):
     """
     Parses a structure-block .nbt document without building a tag object for every block:
     returns (root_tag_without_blocks, [(x, y, z, state_index), ...]). Much lighter on memory
-    for very large structures (millions of blocks). Block entities ('nbt') are skipped.
+    for very large structures (millions of blocks). Block entity data ('nbt': chest contents,
+    sign texts...) is skipped, or stored in the dict 'block_nbt' as (x, y, z) -> compound.
     """
     data = bytes(data)
     if not data or data[0] != 10:
@@ -178,6 +179,7 @@ def parse_structure_bytes(data):
             append = blocks.append
             for _ in range(max(0, length)):
                 x = y = z = state = 0
+                extra = None
                 while True:
                     tt = data[pos]
                     if tt == 0:
@@ -192,9 +194,13 @@ def parse_structure_bytes(data):
                     elif tt == 3 and key == b"state":
                         state = unpack_i(data, pos)[0]
                         pos += 4
+                    elif tt == 10 and key == b"nbt" and block_nbt is not None:
+                        extra, pos = _read_payload(data, pos, tt)
                     else:
                         _, pos = _read_payload(data, pos, tt)
                 append((x, y, z, state))
+                if extra:
+                    block_nbt[(x, y, z)] = extra
         else:
             root[name], pos = _read_payload(data, pos, t_type)
     return root, blocks
@@ -347,7 +353,7 @@ def load_nbt(f_or_path):
 def save_nbt(tag, name, f_or_path, compressed=True):
     data = nbt_to_bytes(tag, name)
     if compressed:
-        data = gzip.compress(data, compresslevel=6)
+        data = gzip.compress(data, compresslevel=6, mtime=0)   # deterministic: same content, same file
     if isinstance(f_or_path, str):
         with open(f_or_path, 'wb') as f:
             f.write(data)

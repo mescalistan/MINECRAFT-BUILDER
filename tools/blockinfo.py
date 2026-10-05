@@ -109,13 +109,15 @@ def _build_vanilla_blocks():
         else:
             names.update({f"{w}_{log}", f"{w}_{wood}", f"stripped_{w}_{log}", f"stripped_{w}_{wood}"})
         names.update({f"{w}_planks", f"{w}_stairs", f"{w}_slab", f"{w}_fence", f"{w}_fence_gate",
-                      f"{w}_door", f"{w}_trapdoor", f"{w}_pressure_plate", f"{w}_button"})
+                      f"{w}_door", f"{w}_trapdoor", f"{w}_pressure_plate", f"{w}_button",
+                      f"{w}_sign", f"{w}_wall_sign", f"{w}_hanging_sign", f"{w}_wall_hanging_sign"})
         if not nether and w != "bamboo":
             names.add(f"{w}_leaves")
     names.update({"azalea_leaves", "flowering_azalea_leaves", "mangrove_roots", "muddy_mangrove_roots"})
     for c in COLORS:
         for suffix in ("wool", "carpet", "concrete", "concrete_powder", "terracotta", "glazed_terracotta",
-                       "stained_glass", "stained_glass_pane", "bed", "candle", "banner", "shulker_box"):
+                       "stained_glass", "stained_glass_pane", "bed", "candle", "banner", "wall_banner",
+                       "shulker_box"):
             names.add(f"{c}_{suffix}")
     names.update({"terracotta", "shulker_box"})
     for base, (prefix, wall) in _STONE_FAMILIES_FULL.items():
@@ -343,6 +345,14 @@ def allowed_properties(n):
         return {"face": {"floor", "wall", "ceiling"}, "facing": HORIZONTAL, "powered": BOOL}
     if n.endswith("_pressure_plate"):
         return {"powered": BOOL} if "weighted" not in n else {"power": None}
+    if n.endswith(("_wall_sign", "_wall_hanging_sign")):
+        return {"facing": HORIZONTAL, **wl}
+    if n.endswith("_hanging_sign"):
+        return {"rotation": {str(i) for i in range(16)}, "attached": BOOL, **wl}
+    if n.endswith("_sign"):
+        return {"rotation": {str(i) for i in range(16)}, **wl}
+    if n.endswith("_wall_banner"):
+        return {"facing": HORIZONTAL}
     if n.endswith("_banner"):
         return {"rotation": {str(i) for i in range(16)}}
     table = {
@@ -399,6 +409,9 @@ def allowed_properties(n):
         "sea_pickle": {"pickles": {"1", "2", "3", "4"}, **wl},
         "amethyst_cluster": {"facing": ALL_DIRS, **wl},
         "hopper": {"facing": {"down", "north", "south", "east", "west"}, "enabled": BOOL},
+        "dispenser": {"facing": ALL_DIRS, "triggered": BOOL}, "dropper": {"facing": ALL_DIRS, "triggered": BOOL},
+        "crafter": {"orientation": None, "crafting": BOOL, "triggered": BOOL},
+        "bubble_column": {"drag": BOOL},
         "pink_petals": {"facing": HORIZONTAL, "flower_amount": {"1", "2", "3", "4"}},
         "tall_grass": {"half": {"upper", "lower"}}, "large_fern": {"half": {"upper", "lower"}},
         "sunflower": {"half": {"upper", "lower"}}, "lilac": {"half": {"upper", "lower"}},

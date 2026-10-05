@@ -2,9 +2,13 @@
 World-level block editing across multiple region files, plus the structure
 injection routine used by the GUI worker thread.
 """
+import json
 import os
+import time
+import uuid
 
-from nbt_codec import TAG_Compound, TAG_String
+from nbt_codec import (TAG_Compound, TAG_String, TAG_List, TAG_Double, TAG_Float, TAG_Int, TAG_Int_Array,
+                       TAG_Byte)
 from mca_codec import (
     MCARegion, ChunkEditor, AIR_NAMES, block_key, chunk_is_full, read_world_surface,
     chunk_format_supported,
@@ -86,6 +90,37 @@ def to_state(block):
     return state
 
 
+TEXT_COMPONENT_NBT_VERSION = 4325   # 1.21.5: names are stored as text components, no longer as JSON
+
+
+def adapt_block_data(data, version):
+    """
+    Block entity data written by the templates uses plain strings for names (CustomName, item
+    custom_name), valid from 1.21.5. Older worlds want a JSON string: converted here.
+    """
+    if version >= TEXT_COMPONENT_NBT_VERSION:
+        return data
+
+    def to_json(v):
+        return v if v[:1] in ('"', "{", "[") else TAG_String(json.dumps(str(v)))
+
+    out = TAG_Compound(data)
+    if isinstance(out.get("CustomName"), str):
+        out["CustomName"] = to_json(out["CustomName"])
+    items = out.get("Items")
+    if items:
+        new_items = []
+        for item in items:
+            comps = item.get("components")
+            if comps and isinstance(comps.get("minecraft:custom_name"), str):
+                item = TAG_Compound(item)
+                item["components"] = TAG_Compound(comps)
+                item["components"]["minecraft:custom_name"] = to_json(comps["minecraft:custom_name"])
+            new_items.append(item)
+        out["Items"] = TAG_List(10, new_items)
+    return out
+
+
 class World:
     """Global-coordinate access to the regions of one dimension."""
 
@@ -94,6 +129,7 @@ class World:
         self._regions = {}   # (rx, rz) -> MCARegion | None
         self._editors = {}   # (chunk_x, chunk_z) -> ChunkEditor | None
         self.skipped_chunks = {}  # (chunk_x, chunk_z) -> reason
+        self._entities = {}       # (chunk_x, chunk_z) -> [entity compound] to add on save
         for region in (preloaded or []):
             self._regions[(region.rx, region.rz)] = region
 
@@ -159,6 +195,38 @@ class World:
             return False
         return editor.set_block(x & 15, y, z & 15, state, key)
 
+    def set_block_data(self, x, y, z, data):
+        """Block entity data (container items...) merged into the block at (x, y, z) on save."""
+        editor = self.editor(x >> 4, z >> 4)
+        if editor is None:
+            return False
+        editor.set_block_data(x, y, z, adapt_block_data(data, editor.data_version))
+        return True
+
+    def add_entity(self, nbt, x, y, z, yaw=0.0):
+        """
+        Adds an entity (compound with "id", as in structure files) at world position (x, y, z).
+        It gets a new UUID and is written to the entities/ region folder on save.
+        Returns False if the chunk is not generated.
+        """
+        cx, cz = int(x) >> 4, int(z) >> 4
+        if self.editor(cx, cz) is None:
+            return False
+        ent = TAG_Compound(nbt)
+        for k in ("UUID", "UUIDMost", "UUIDLeast", "Pos", "Motion", "Rotation", "Leash", "sleeping_pos"):
+            ent.pop(k, None)
+        ent["Pos"] = TAG_List(6, [TAG_Double(x), TAG_Double(y), TAG_Double(z)])
+        ent["Motion"] = TAG_List(6, [TAG_Double(0.0)] * 3)
+        ent["Rotation"] = TAG_List(5, [TAG_Float(yaw), TAG_Float(0.0)])
+        ent["OnGround"] = TAG_Byte(1)
+        u = uuid.uuid4().int
+        ent["UUID"] = TAG_Int_Array([((u >> s) & 0xFFFFFFFF) - ((u >> s) & 0x80000000) * 2 for s in (96, 64, 32, 0)])
+        self._entities.setdefault((cx, cz), []).append(ent)
+        return True
+
+    def entities_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(self.region_dir)), "entities")
+
     def surface_y(self, x, z):
         """Y of the topmost block of a column from the chunk heightmap, or None."""
         editor = self.editor(x >> 4, z >> 4)
@@ -192,12 +260,14 @@ class World:
     def save(self, backup=True, log=None):
         """Flushes edited chunks and writes every modified region. Returns backup paths."""
         backups = []
+        self.last_backups = []    # (region file, backup file): used to undo the injection
         regions = self.modified_regions()
         for region in regions:
             if backup:
                 path = region.create_backup()
                 if path:
                     backups.append(path)
+                    self.last_backups.append((region.file_path, path))
                     if log:
                         log(f"Backup creato: {os.path.basename(path)}")
         for (cx, cz), editor in self._editors.items():
@@ -207,6 +277,50 @@ class World:
             if log:
                 log(f"Scrittura {os.path.basename(region.file_path)} ({len(region.dirty)} chunk modificati)...")
             region.save()
+        if self._entities:
+            backups += self._save_entities(backup, log)
+        return backups
+
+    def _save_entities(self, backup, log):
+        """Appends the new entities to the chunks of the entities/ region files (1.17+ worlds)."""
+        backups = []
+        by_region = {}
+        for (cx, cz), ents in self._entities.items():
+            by_region.setdefault((cx >> 5, cz >> 5), []).append((cx, cz, ents))
+        folder = self.entities_dir()
+        for (rx, rz), chunks in by_region.items():
+            path = os.path.join(folder, f"r.{rx}.{rz}.mca")
+            existed = os.path.exists(path)
+            region = MCARegion(path)
+            if backup:
+                if existed:
+                    bpath = region.create_backup()
+                    if bpath:
+                        backups.append(bpath)
+                        self.last_backups.append((path, bpath))
+                else:
+                    self.last_backups.append((path, None))   # undo = delete the new file
+            now = int(time.time())
+            count = 0
+            for cx, cz, ents in chunks:
+                key = (cx & 31, cz & 31)
+                entry = region.chunks.get(key)
+                editor = self.editor(cx, cz)
+                version = editor.data_version if editor is not None else 0
+                if entry is None:
+                    nbt = TAG_Compound({"DataVersion": TAG_Int(version),
+                                        "Position": TAG_Int_Array([cx, cz]),
+                                        "Entities": TAG_List(10, [])})
+                else:
+                    nbt = entry[0]
+                old = list(nbt.get("Entities") or [])
+                nbt["Entities"] = TAG_List(10, old + ents)
+                region.chunks[key] = (nbt, now)
+                count += len(ents)
+            if log:
+                log(f"Scrittura entita' in {os.path.basename(path)} ({count} entita')...")
+            region.save()
+        self._entities = {}
         return backups
 
 
@@ -256,7 +370,8 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
     """
     log = log or (lambda msg: None)
     stats = {"placed": 0, "cleared": 0, "foundation": 0, "skipped_missing": 0,
-             "skipped_modded": 0, "skipped_height": 0, "destroyed": 0, "blend": 0}
+             "skipped_modded": 0, "skipped_height": 0, "destroyed": 0, "blend": 0,
+             "block_data": 0, "entities": 0}
 
     stats["path"] = 0
     for item in placements:
@@ -347,6 +462,15 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                     stats["destroyed"] += 1
             else:
                 stats["skipped_height"] += 1
+
+        for (bx, by, bz), data in getattr(struct, "block_nbt", {}).items():
+            if struct.blocks.get((bx, by, bz), {}).get("Name", "minecraft:air") not in AIR_NAMES:
+                if world.set_block_data(ox + bx, oy + by, oz + bz, data):
+                    stats["block_data"] += 1
+        for ent in getattr(struct, "entities", ()):
+            ex, ey, ez = ent["pos"]
+            if world.add_entity(ent["nbt"], ox + ex, oy + ey, oz + ez, ent.get("yaw", 0.0)):
+                stats["entities"] += 1
 
         for gx, gz, ground, base_y, (surf_block, sub_block) in foundation_cols:
             surf, sub = to_state(surf_block), to_state(sub_block)

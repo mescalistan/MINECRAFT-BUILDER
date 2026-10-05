@@ -28,19 +28,21 @@ WALL_STYLES = {
         "body": [("stone_bricks", 8), ("cracked_stone_bricks", 2), ("mossy_stone_bricks", 2), ("andesite", 1)],
         "base": "cobblestone", "floor": "stone_bricks", "rail": "stone_brick_wall", "stairs": "stone_brick",
         "slab": "stone_brick", "accent": "chiseled_stone_bricks", "road": "stone_bricks", "wood": "spruce",
+        "banner": "red",
     },
     "deserto": {
         "title": "Arenaria del deserto",
         "body": [("cut_sandstone", 6), ("sandstone", 3), ("smooth_sandstone", 2)],
         "base": "smooth_sandstone", "floor": "smooth_sandstone", "rail": "sandstone_wall", "stairs": "sandstone",
         "slab": "sandstone", "accent": "chiseled_sandstone", "road": "smooth_sandstone", "wood": "acacia",
+        "banner": "orange",
     },
     "nordico": {
         "title": "Ardesia nordica",
         "body": [("deepslate_bricks", 6), ("cracked_deepslate_bricks", 2), ("deepslate_tiles", 2)],
         "base": "cobbled_deepslate", "floor": "polished_deepslate", "rail": "deepslate_brick_wall",
         "stairs": "deepslate_brick", "slab": "deepslate_brick", "accent": "chiseled_deepslate",
-        "road": "polished_deepslate", "wood": "spruce",
+        "road": "polished_deepslate", "wood": "spruce", "banner": "blue",
     },
     "oscura": {
         "title": "Fortezza di pietra nera",
@@ -48,12 +50,14 @@ WALL_STYLES = {
         "base": "blackstone", "floor": "polished_blackstone", "rail": "polished_blackstone_brick_wall",
         "stairs": "polished_blackstone_brick", "slab": "polished_blackstone_brick",
         "accent": "chiseled_polished_blackstone", "road": "polished_blackstone", "wood": "dark_oak",
+        "banner": "purple",
     },
     "palizzata": {
         "title": "Palizzata di legno",
         "body": [("spruce_log", 1)], "palisade": True,
         "base": "cobblestone", "floor": "spruce_planks", "rail": "spruce_fence", "stairs": "spruce",
         "slab": "spruce", "accent": "stripped_spruce_log", "road": "coarse_dirt", "wood": "spruce",
+        "banner": "green",
     },
 }
 
@@ -65,7 +69,7 @@ GATE_TYPES = {
 
 THICKNESS = 3          # wall thickness
 TOWER_R = 3            # tower radius
-GATE_HALF = 6          # half width of the gatehouse along the wall
+GATE_HALF = 7          # half width of the gatehouse along the wall
 GATE_RAISE = 10        # gatehouse roof above the road (the walkway reaches it at the gate)
 
 
@@ -207,21 +211,32 @@ def night_lamp(b, x, y, z):
 # Gate (built in a local frame: passage along Z, outside towards -Z)
 # ---------------------------------------------------------------------------
 
-GATE_OX, GATE_OZ, GATE_H = 11, 18, 5      # local origin inside the builder; road level
+GATE_OX, GATE_OZ, GATE_H = 12, 18, 5      # local origin inside the builder; road level
 
 
 def build_gate(style_key, gate_type, lights=True):
     """Gatehouse structure; the road block at the gate centre is at builder (GATE_OX, GATE_H, GATE_OZ)."""
     st = WALL_STYLES[style_key]
     h = GATE_H
-    b = Builder(2 * GATE_OX + 1, h + GATE_RAISE + 5, GATE_OZ + 12, seed=21)
+    b = Builder(2 * GATE_OX + 1, h + GATE_RAISE + 5, GATE_OZ + 22, seed=21)
     wood = st["wood"]
+    moat = gate_type == "levatoio"
+    portcullis = gate_type == "portone"
+    pw = 2 if portcullis else 1          # half width of the passage
+    zd = 3 if portcullis else 2          # half depth of the gatehouse
+    ptop = h + 3 if portcullis else h + 4
 
     def P(x, y, z, block, **props):
         b.set(x + GATE_OX, y, z + GATE_OZ, block, **props)
 
-    def G(x, y, z):
-        return b.get(x + GATE_OX, y, z + GATE_OZ)
+    def D(x, y, z):
+        """Redstone dust with a solid block under it."""
+        P(x, y - 1, z, st["base"])
+        dust(b, x + GATE_OX, y, z + GATE_OZ)
+
+    def R(x, y, z, signal_dir, delay=1):
+        P(x, y - 1, z, st["base"])
+        repeater(b, x + GATE_OX, y, z + GATE_OZ, signal_dir, delay)
 
     def body(x, y, z):
         blocks = [c[0] for c in st["body"]]
@@ -235,24 +250,22 @@ def build_gate(style_key, gate_type, lights=True):
     def stair(x, y, z, facing, top=False):
         b.stair(x + GATE_OX, y, z + GATE_OZ, st["stairs"], facing, top)
 
-    moat = gate_type == "levatoio"
     # --- roads in and out (levelled), clear of plants ---
-    for z in range(-GATE_OZ + 1, 11):
-        for x in range(-1, 2):
+    for z in range(-GATE_OZ + 1, 12):
+        for x in range(-pw, pw + 1):
             P(x, h, z, st["road"])
             P(x, h - 1, z, st["base"])
-        if not (-2 <= z <= 2):
-            for x in range(-2, 3):
+        if not (-zd <= z <= zd):
+            for x in range(-pw - 1, pw + 2):
                 for y in range(h + 1, h + 4):
                     P(x, y, z, AIR)
 
-    # --- mechanism casing (under the moat and the roads) ---
+    # --- drawbridge: moat and rising bridge with the sensors ---
     if moat:
         for x in range(-5, 6):
             for z in range(-15, 7):
                 for y in range(h - 5, h - 1):
                     P(x, y, z, st["base"])
-        # moat: 13 wide, 2 long, 2 deep
         for x in range(-7, 8):
             for z in (-6, -3):
                 for y in range(h - 3, h):
@@ -274,7 +287,6 @@ def build_gate(style_key, gate_type, lights=True):
                 else:
                     P(x, h - 2, z, "water", level="0")
                     P(x, h - 3, z, st["base"])
-        # the banks step down to the bridge, which comes up one block below the road
         for x in range(-1, 2):
             stair(x, h, -6, "north")
             stair(x, h, -3, "south")
@@ -282,58 +294,87 @@ def build_gate(style_key, gate_type, lights=True):
 
     # --- gatehouse ---
     for x in range(-GATE_HALF, GATE_HALF + 1):
-        for z in range(-2, 3):
-            passage = abs(x) <= 1
+        for z in range(-zd, zd + 1):
+            passage = abs(x) <= pw
             for y in range(h - 1 if not moat else h, h + GATE_RAISE):
                 if passage and y <= h:
                     continue
-                if passage and y <= h + 4:
+                if passage and y <= ptop:
                     P(x, y, z, AIR)
                     continue
                 body(x, y, z)
             P(x, h + GATE_RAISE, z, st["floor"])
             for y in range(h + GATE_RAISE + 1, h + GATE_RAISE + 4):
                 P(x, y, z, AIR)
-    # rounded arch and raised portcullis teeth
-    for z in range(-2, 3):
-        stair(-1, h + 4, z, "west", top=True)
-        stair(1, h + 4, z, "east", top=True)
-    for x in range(-1, 2):
-        P(x, h + 4, -2, "iron_bars")
-    for x in (-2, 2):
-        for z in (-2, 2):
-            P(x, h + 1, z, st["accent"])
-            P(x, h + 5, z, st["accent"])
-    # parapets on the gatehouse roof (open where the wall walkway arrives at x = +-6)
+    if portcullis:
+        # rounded corners of the big opening (the middle row is the portcullis)
+        for z in range(-zd, zd + 1):
+            if z:
+                stair(-pw, ptop, z, "west", top=True)
+                stair(pw, ptop, z, "east", top=True)
+    else:
+        for z in range(-zd, zd + 1):
+            stair(-1, h + 4, z, "west", top=True)
+            stair(1, h + 4, z, "east", top=True)
+        for x in range(-1, 2):
+            P(x, h + 4, -zd, "iron_bars")
+    # carved frame around the opening on both faces, with a keystone
+    for z in (-zd, zd):
+        for y in range(h + 1, ptop + 2):
+            for x in (-(pw + 1), pw + 1):
+                P(x, y, z, st["accent"])
+        for x in range(-(pw + 1), pw + 2):
+            P(x, ptop + 1, z, st["accent"])
+        P(0, ptop + 2, z, st["accent"])
+        stair(-1, ptop + 2, z, "east")
+        stair(1, ptop + 2, z, "west")
+    # machicolations along the top of the outer face
+    for x in range(-GATE_HALF, GATE_HALF + 1):
+        stair(x, h + GATE_RAISE - 1, -zd - 1, "south", top=True)
+    # banners on both sides of the entrance
+    for x in (-(pw + 3), pw + 3):
+        P(x, ptop + 2, -zd - 1, f"{st.get('banner', 'red')}_wall_banner", facing="north")
+        P(x, ptop + 1, -zd - 1, AIR)
+    # parapets on the gatehouse roof (open where the wall walkway arrives at x = +-GATE_HALF)
     top = h + GATE_RAISE
     for x in range(-GATE_HALF, GATE_HALF + 1):
-        body(x, top + 1, -2)
+        body(x, top + 1, -zd)
         if x % 2 == 0:
-            body(x, top + 2, -2)
-        P(x, top + 1, 2, st["rail"])
+            body(x, top + 2, -zd)
+        P(x, top + 1, zd, st["rail"])
     for x in (-GATE_HALF, GATE_HALF):
-        for z in (-2, 2):
+        for z in (-zd, zd):
             body(x, top + 1, z)
             body(x, top + 2, z)
             b.lantern(x + GATE_OX, top + 3, z + GATE_OZ)
+    # two crenellated turrets on the front corners, taller than the gatehouse
+    for sx in (-1, 1):
+        xs = sorted((sx * (GATE_HALF - 2), sx * GATE_HALF))
+        for x in range(xs[0], xs[1] + 1):
+            for z in range(-zd, -zd + 2):
+                for y in range(top + 1, top + 5):
+                    body(x, y, z)
+                if (x + z) % 2 == 0:
+                    body(x, top + 5, z)
+        b.lantern(sx * (GATE_HALF - 1) + GATE_OX, top + 5, -zd + GATE_OZ)
     # ladder from the courtyard up to the gatehouse roof, inside the west tower
+    lx = -5 if portcullis else -4
     for y in range(h + 1, top):
-        P(-4, y, 0, AIR)
-        P(-4, y, 1, AIR) if y <= h + 3 else None
-    b.ladder(-4 + GATE_OX, h + 1, top, GATE_OZ, "south")
-    b.door(-4 + GATE_OX, h + 1, 2 + GATE_OZ, "north", wood=wood)
-    for x in (-4, -3, -2):
-        P(x, h, 3, st["road"])
-        P(x, h + 1, 3, AIR)
-        P(x, h + 2, 3, AIR)
-    P(-4, h + 4, 1, st["base"])
-    b.lantern(-4 + GATE_OX, h + 3, 1 + GATE_OZ, hanging=True)
-
-    if gate_type in ("portone", "levatoio"):
-        _lever_toggle(P, b, h, st, gate_type)
+        P(lx, y, 0, AIR)
+    for z in range(1, zd):
+        for y in range(h + 1, h + 4):
+            P(lx, y, z, AIR)
+        P(lx, h + 4, z, st["base"])
+    b.ladder(lx + GATE_OX, h + 1, top, GATE_OZ, "south")
+    b.door(lx + GATE_OX, h + 1, zd + GATE_OZ, "north", wood=wood)
+    for x in range(lx, lx + 3):
+        P(x, h, zd + 1, st["road"])
+        P(x, h + 1, zd + 1, AIR)
+        P(x, h + 2, zd + 1, AIR)
+    b.lantern(lx + GATE_OX, h + 3, 1 + GATE_OZ, hanging=True)
 
     # --- lights ---
-    if lights:
+    if lights and not portcullis:
         # passage ceiling: a sculk sensor on the centre lamp lights the cross of five lamps
         for x, z in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
             P(x, h + 5, z, "redstone_lamp", lit="false")
@@ -343,17 +384,136 @@ def build_gate(style_key, gate_type, lights=True):
             for z, behind in ((-2, -1), (2, 1)):
                 P(x, h + 3, z, "redstone_lamp", lit="false")
                 sensor(b, x + GATE_OX, h + 3, behind + GATE_OZ)
+    if lights:
         night_lamp(b, GATE_OX, top, GATE_OZ)
-    else:
-        for x, z in ((0, -2), (0, 2)):
-            b.lantern(x + GATE_OX, h + 3, z + GATE_OZ, hanging=True)
+    if portcullis or not lights:
+        for z in (-zd + 1, zd - 1):
+            b.lantern(GATE_OX, ptop, z + GATE_OZ, hanging=True)
     # lantern posts along the approach road
-    for x in (-2, 2):
-        for z in (-9 if moat else -5, 5):
+    for x in (-pw - 1, pw + 1):
+        for z in (-9 if moat else -6, 6):
             P(x, h, z, st["base"])
             P(x, h + 1, z, f"{wood}_fence")
             b.lantern(x + GATE_OX, h + 2, z + GATE_OZ)
+
+    # --- mechanisms ---
+    if portcullis:
+        _portcullis(P, D, R, b, h, st)
+    if gate_type in ("portone", "levatoio"):
+        _xor_levers(P, D, R, b, h, st, gate_type)
     return b
+
+
+def _wire(P, D, points):
+    """
+    Redstone dust along consecutive points (one block apart horizontally, at most one up or down),
+    with a solid block under every dust and air above the lower dust of every step, as redstone needs.
+    """
+    for i, (x, y, z) in enumerate(points):
+        D(x, y, z)
+        if i:
+            px, py, pz = points[i - 1]
+            if y == py + 1:
+                P(px, py + 1, pz, AIR)
+            elif y == py - 1:
+                P(x, y + 1, z, AIR)
+
+
+def _portcullis(P, D, R, b, h, st):
+    """
+    The big gate: a portcullis 5 blocks wide. When the gate closes, five sticky pistons hidden in
+    the ceiling lower the iron bars and five more under the road raise a row of road blocks, so the
+    whole opening is shut. All the wiring is inside the gatehouse: two rows of dust (under the road
+    and above the ceiling) joined by a staircase of dust hidden in the east tower.
+    """
+    m = h - 2
+    for x in range(-4, 6):
+        for z in range(-3, 4):
+            for y in range(h - 4, h - 1):
+                P(x, y, z, st["base"])
+    for x in range(-2, 3):
+        P(x, h - 1, 0, "sticky_piston", facing="up", extended="false")
+        P(x, h, 0, st["road"])
+        P(x, m, 0, st["base"])
+        R(x, m, 1, "north")
+        P(x, h + 3, 0, "iron_bars")
+        P(x, h + 4, 0, "sticky_piston", facing="down", extended="false")
+        P(x, h + 5, 0, st["base"])
+        R(x, h + 5, 1, "north")
+    _wire(P, D, [(x, m, 2) for x in range(-3, 5)])
+    R(3, m, 2, "east")
+    riser = [(4, m, 2), (5, h - 1, 2), (6, h, 2), (6, h + 1, 1), (6, h + 2, 0), (6, h + 3, -1), (6, h + 4, -2),
+             (5, h + 5, -2), (4, h + 5, -2), (4, h + 5, -1), (4, h + 5, 0), (4, h + 5, 1), (4, h + 5, 2)]
+    riser += [(x, h + 5, 2) for x in range(3, -3, -1)]
+    _wire(P, D, riser)
+    R(4, h + 5, -1, "south")
+
+
+def _xor_levers(P, D, R, b, h, st, gate_type):
+    """
+    Two levers that both open and close the gate, like the two switches of a staircase light:
+    one on the inner wall of the gatehouse, beside the passage, and one hidden in a bush beside the
+    approach road outside. The gate is open when exactly one lever is down (exclusive OR, made with
+    two comparators in subtract mode), so every flip of either lever changes its state: it can be
+    opened from outside, crossed and closed from inside. All the wiring runs inside the gatehouse
+    towers and under the courtyard.
+      - portone:  the output drives the portcullis (open = pistons retracted, the initial state).
+      - levatoio: the output joins the circuit of the sensors and keeps the bridge raised.
+    """
+    m, lo = h - 2, h - 4
+    for x in range(-12, 10):
+        for z in range(7, 21):
+            for y in range(h - 5, h):
+                P(x, y, z, st["base"])
+    # inner lever, on the wall of the gatehouse beside the passage
+    if gate_type == "portone":
+        P(4, h + 2, 4, "lever", face="wall", facing="south", powered="false")
+        a = [(4, h + 2, 2), (4, h + 1, 1), (4, h, 0), (4, h - 1, -1), (4, m, -2), (5, m, -2), (6, m, -2),
+             (7, m, -2), (8, m, -2), (8, m, -1)]
+    else:
+        P(4, h + 2, 3, "lever", face="wall", facing="south", powered="false")
+        a = [(4, h + 2, 1), (5, h + 1, 1), (6, h, 1), (6, h - 1, 0), (6, m, -1), (7, m, -1), (8, m, -1)]
+    a += [(8, m, z) for z in range(0, 14)] + [(x, m, 13) for x in range(7, -5, -1)]
+    a += [(-4, m, 12), (-4, m, 11), (-4, m, 10)]
+    _wire(P, D, a)
+    _wire(P, D, [(0, m, z) for z in range(13, 7, -1)])
+    R(8, m, 3, "south")
+    R(4, m, 13, "west")
+    R(-4, m, 9, "north")
+    # hidden outer lever, on a mossy stone inside a bush
+    P(-6, h, -11, "mossy_cobblestone")
+    P(-6, h + 1, -11, "lever", face="floor", facing="east", powered="false")
+    for x, y, z in ((-7, h + 1, -11), (-6, h + 1, -12), (-6, h + 1, -10), (-7, h + 1, -12), (-7, h + 1, -10),
+                    (-6, h + 2, -11), (-7, h + 2, -11), (-6, h + 2, -12), (-6, h + 2, -10)):
+        if y == h + 1:
+            P(x, h, z, "moss_block")
+        P(x, y, z, "oak_leaves", persistent="true", distance="1", waterlogged="false")
+    bpath = [(-6, h - 1, -11)] + [(x, m, -11) for x in range(-7, -12, -1)]
+    bpath += [(-11, m, z) for z in range(-10, 20)] + [(x, m, 19) for x in range(-10, -1)]
+    bpath += [(-2, m, 18), (-2, m, 17)] + [(x, m, 17) for x in range(-3, -7, -1)]
+    bpath += [(-6, m, z) for z in range(16, 7, -1)]
+    _wire(P, D, bpath)
+    for x, y, z, d in ((-11, m, -4, "south"), (-11, m, 10, "south"), (-6, m, 19, "east"), (-6, m, 13, "north")):
+        R(x, y, z, d)
+    # B passes under A to reach the second comparator
+    _wire(P, D, [(-2, m, 17), (-2, m - 1, 16), (-2, lo, 15), (-2, lo, 14), (-2, lo, 13), (-2, lo, 12),
+                 (-2, m - 1, 11), (-2, m, 10)])
+    R(-2, m, 9, "north")
+    # exclusive OR: C1 = A minus B, C2 = B minus A
+    for x in (-4, -2):
+        P(x, m - 1, 8, st["base"])
+        P(x, m, 8, "comparator", facing="south", mode="subtract", powered="false")
+    R(-5, m, 8, "east")     # B into the side of C1
+    R(-1, m, 8, "west")     # A into the side of C2
+    _wire(P, D, [(-4, m, 7), (-3, m, 7), (-2, m, 7)])
+    _wire(P, D, [(-3, m, 7), (-3, m, 6), (-3, m, 5), (-3, m, 4), (-3, m, 3)])
+    R(-3, m, 4, "north")
+    if gate_type == "portone":
+        _wire(P, D, [(-3, m, 3), (-3, m, 2)])
+    else:
+        _wire(P, D, [(-3, m, 3), (-4, m, 3), (-5, m, 3), (-5, h - 3, 2), (-5, lo, 1), (-5, lo, 0), (-5, lo, -1),
+                     (-5, lo, -2), (-5, lo, -3), (-4, lo, -3)])
+        R(-5, lo, -1, "north")
 
 
 def _drawbridge_redstone(P, b, h):
@@ -418,106 +578,6 @@ def _drawbridge_redstone(P, b, h):
             D(X(3), lo, Z(z))
         R(X(2), lo, Z(-2), away)
     return b
-
-
-def _lever_toggle(P, b, h, st, gate_type):
-    """
-    Two levers that both open and close the gate: one inside, by the courtyard road, and one
-    hidden in a bush beside the approach road outside. Every flip of either lever (up or down)
-    changes the state of the gate, so it can be opened from outside, crossed and closed from
-    inside. Each lever stands on an observer that sends a pulse when the lever moves; the pulses
-    reach a waxed copper bulb, which switches on/off at every pulse (it is the memory), and a
-    comparator reads the bulb.
-      - levatoio: bulb on = bridge held up (open); bulb off = automatic mode with the sensors.
-      - portone:  bulb off = gates open (initial state); bulb on = gates closed.
-    """
-    def D(x, y, z):
-        P(x, y - 1, z, st["base"])
-        dust(b, x + GATE_OX, y, z + GATE_OZ)
-
-    def R(x, y, z, signal_dir, delay=1):
-        P(x, y - 1, z, st["base"])
-        repeater(b, x + GATE_OX, y, z + GATE_OZ, signal_dir, delay)
-
-    m = h - 2
-    # casing of the machine under the courtyard (west side)
-    for x in range(-10, -3):
-        for z in range(-3, 10):
-            for y in range(h - 5, h if z > -3 else h - 3):
-                P(x, y, z, st["base"])
-    # inner lever, on an observer in the courtyard pavement
-    P(-5, h + 1, 5, "lever", face="floor", facing="north", powered="false")
-    P(-5, h, 5, "observer", facing="up", powered="false")
-    D(-5, h - 1, 5)
-    P(-5, h - 1, 6, AIR)
-    D(-5, m, 6)
-    R(-6, m, 6, "west")
-    # memory: waxed copper bulb read by a comparator
-    P(-7, m, 6, "waxed_copper_bulb", lit="false", powered="false")
-    P(-7, m - 1, 6, st["base"])
-    P(-8, m, 6, "comparator", facing="east", mode="compare", powered="false")
-    P(-8, m - 1, 6, st["base"])
-    # hidden outer lever: on an observer inside a bush beside the approach road
-    P(5, h + 1, -11, "lever", face="floor", facing="west", powered="false")
-    P(5, h, -11, "observer", facing="up", powered="false")
-    for x, y, z in ((6, h + 1, -11), (5, h + 1, -12), (5, h + 1, -10), (6, h + 1, -12), (6, h + 1, -10),
-                    (5, h + 2, -11), (6, h + 2, -11), (5, h + 2, -12), (5, h + 2, -10)):
-        P(x, h, z, "moss_block") if y == h + 1 else None
-        P(x, y, z, "oak_leaves", persistent="true", distance="1", waterlogged="false")
-    D(5, h - 1, -11)
-    P(6, h - 1, -11, AIR)
-    for x in (6, 7, 8, 9):
-        D(x, m, -11)
-    for z in range(-10, 10):
-        if z in (-6, 8):
-            R(9, m, z, "south")
-        else:
-            D(9, m, z)
-    for x in range(8, -8, -1):
-        if x == 0:
-            R(x, m, 9, "west")
-        else:
-            D(x, m, 9)
-    D(-7, m, 8)
-    R(-7, m, 7, "north")
-
-    # output of the comparator
-    D(-9, m, 6)
-    D(-9, m, 5)
-    D(-9, m, 4)
-    if gate_type == "levatoio":
-        # down to the circuit of the sensors: joins the inner lane, which feeds both rows of pistons
-        lo = h - 4
-        P(-9, m, 3, AIR)
-        D(-9, h - 3, 3)
-        P(-9, h - 3, 2, AIR)
-        D(-9, lo, 2)
-        D(-9, lo, 1)
-        R(-9, lo, 0, "north")
-        for z in (-1, -2, -3):
-            D(-9, lo, z)
-        for x in range(-8, -3):
-            D(x, lo, -3)
-    else:
-        # redstone torches under the gates keep them powered (open); the comparator switches the
-        # torches off by powering the blocks they stand on, and the gates close
-        D(-9, m, 3)
-        D(-9, m, 2)
-        for x in (-8, -7, -6):
-            D(x, m, 2)
-        R(-5, m, 2, "east")
-        for x in range(-4, 3):
-            D(x, m, 2)
-        D(0, m, 1)
-        P(0, m, 0, st["base"])
-        P(0, h - 1, 0, "redstone_torch", lit="true")
-        for x in (-2, 2):
-            P(x, h - 1, 2, AIR)
-            D(x, h - 1, 1)
-            P(x, h - 1, 0, st["base"])
-            P(x, h, 0, "redstone_torch", lit="true")
-        for x in range(-1, 2):
-            P(x, h + 1, 0, f"{st['wood']}_fence_gate", facing="north", in_wall="false", open="true", powered="true")
 
 
 def straighten_at_gates(points, closed, gates):
