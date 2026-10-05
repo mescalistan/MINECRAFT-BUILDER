@@ -214,6 +214,7 @@ class MapViewer(QWidget):
         self.wall_preview = None     # {"points", "closed", "gates"} in grid coordinates
         self.poly_closable = True    # False while drawing a road (open line)
         self.snap_targets = []       # polylines (grid) the drawn points stick to (existing roads)
+        self.built_lines = []        # walls/roads built with the program: {"kind", "points" (world), "closed"}
         self.edit_drag = None        # index of the vertex being dragged ("edit_poly" mode)
         self.magnet_point = None
 
@@ -640,6 +641,11 @@ class MapViewer(QWidget):
             for entry in self.staged_placements:
                 flat.extend(entry["items"] if entry.get("kind") == "group" else [entry])
             for item in flat:
+                if item.get("kind") == "demolish":
+                    for c in item["footprint"].get("columns", ()):
+                        gx, gz = self._grid_of_world(c[0], c[1])
+                        painter.fillRect(QRectF(gx, gz, 1, 1), QColor(231, 76, 60, 90))
+                    continue
                 if item.get("kind") == "path":
                     for (x, zz) in item.get("cells", ()):
                         gx, gz = self._grid_of_world(x, zz)
@@ -662,6 +668,7 @@ class MapViewer(QWidget):
                                max(rect.width() * z, 120)))
 
         self.hint_text = None
+        self._draw_built_lines(painter)
         self._draw_wall_overlay(painter)
 
         # --- bridge / area selection overlays ---
@@ -718,6 +725,22 @@ class MapViewer(QWidget):
         self._draw_hud(painter)
         self._draw_hint(painter)
         self._draw_tooltip(painter)
+
+    def _draw_built_lines(self, painter):
+        """Walls and roads built with the program: thin lines along their axis (they can be edited)."""
+        if not self.built_lines or not self.show_placed_structures:
+            return
+        colours = {"walls": QColor(189, 195, 199, 190), "roads": QColor(211, 160, 90, 200)}
+        for line in self.built_lines:
+            pts = [QPointF(*self._grid_of_world(x, z)) + QPointF(0.5, 0.5) for x, z in line["points"]]
+            if line.get("closed") and pts:
+                pts.append(pts[0])
+            pen = QPen(colours.get(line["kind"], QColor(200, 200, 200)), 0)
+            if line["kind"] == "walls":
+                pen.setStyle(Qt.PenStyle.DashDotLine)
+            painter.setPen(pen)
+            for a, b in zip(pts, pts[1:]):
+                painter.drawLine(a, b)
 
     def _draw_hint(self, painter):
         """One line of help at the top of the map while drawing or editing a line."""

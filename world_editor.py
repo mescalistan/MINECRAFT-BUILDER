@@ -374,9 +374,14 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
              "block_data": 0, "entities": 0}
 
     stats["path"] = 0
+    stats["demolished"] = 0
     for item in placements:
         if item.get("kind") == "path":
             stats["path"] += paint_path(world, item.get("cells", ()), item.get("block", "minecraft:dirt_path"))
+            continue
+        if item.get("kind") == "demolish":
+            log(f"Demolizione {item.get('name', '')}...")
+            stats["demolished"] += demolish(world, item["footprint"])
             continue
         struct = item["structure"]
         ox, oy, oz = item["world_x"], item["y_coord"], item["world_z"]
@@ -532,6 +537,158 @@ _PATH_ON = {
     "minecraft:sand": "minecraft:smooth_sandstone", "minecraft:red_sand": "minecraft:smooth_red_sandstone",
     "minecraft:stone": "minecraft:gravel", "minecraft:snow_block": "minecraft:packed_ice",
 }
+
+
+# ---------------------------------------------------------------------------
+# Footprint of walls and roads: lets the program demolish or rebuild them later
+# ---------------------------------------------------------------------------
+
+def footprint(placements, terrain):
+    """
+    Columns touched by a group of placements (a wall, a road), with the ground as it was before:
+    {"columns": [[x, z, ground, low, high, surface, b_low, ..., b_ground]], "surfaces": [block names]}.
+    'surface' is -1 for water, else an index in 'surfaces'; b_low..b_ground are the original blocks
+    (indexes in 'surfaces') from the lowest block of the build up to the old ground level. Saved in
+    the world registry, so the build can be demolished or edited later restoring the ground exactly.
+    """
+    cols = {}
+    for p in placements:
+        s = p.get("structure")
+        if s is None:
+            continue
+        ox, oy, oz = p["world_x"], p["y_coord"], p["world_z"]
+        for (bx, by, bz) in s.blocks:
+            key = (ox + bx, oz + bz)
+            y = oy + by
+            lo, hi = cols.get(key, (y, y))
+            cols[key] = (min(lo, y), max(hi, y))
+    names, index, out = [], {}, []
+
+    def idx(name):
+        if name not in index:
+            index[name] = len(names)
+            names.append(name)
+        return index[name]
+
+    original = getattr(terrain, "original_name", None)
+    world = getattr(terrain, "world", None)
+    for (x, z), (lo, hi) in sorted(cols.items()):
+        g = terrain.height(x, z)
+        if g is None:
+            g = lo - 1
+        blocks = []
+        for y in range(lo, g + 1):
+            name = original(x, y, z) if original else None
+            if name is None and world is not None:
+                name = world.get_block_name(x, y, z)
+            blocks.append(idx(name or "minecraft:stone"))
+        if terrain.is_water(x, z):
+            surf = -1
+        else:
+            name = original(x, g, z) if original else None
+            if name is None and world is not None:
+                name = world.get_block_name(x, g, z)
+            surf = idx(name or "minecraft:grass_block")
+        out.append([x, z, int(g), int(lo), int(hi), surf] + blocks)
+    return {"columns": out, "surfaces": names}
+
+
+def footprint_to_text(fp):
+    """Compact form for the world registry (a long wall has thousands of columns)."""
+    if not fp:
+        return None
+    return {"surfaces": fp["surfaces"], "cols": ";".join(",".join(str(v) for v in c) for c in fp["columns"])}
+
+
+def footprint_from_text(data):
+    if not data:
+        return {"columns": [], "surfaces": []}
+    cols = [[int(v) for v in c.split(",")] for c in data.get("cols", "").split(";") if c]
+    return {"columns": cols, "surfaces": list(data.get("surfaces", []))}
+
+
+class RecordedTerrain:
+    """
+    Terrain for re-planning a wall/road that is already built: inside its footprint the ground and
+    the blocks are the ones recorded before it was built (the build itself must not count as ground).
+    """
+
+    def __init__(self, base, record):
+        self.base = base
+        self.world = getattr(base, "world", None)
+        self.cols = {}
+        self.blocks = {}
+        for rec in (record or ()):
+            names = rec.get("surfaces", [])
+            for col in rec.get("columns", ()):
+                x, z, g, lo, hi, surf = col[:6]
+                self.cols[(x, z)] = (g, surf)
+                for i, b in enumerate(col[6:]):
+                    if 0 <= b < len(names):
+                        self.blocks[(x, lo + i, z)] = names[b]
+
+    def original_name(self, x, y, z):
+        """Block that was there before the old build (None: not recorded, read the world)."""
+        if (x, y, z) in self.blocks:
+            return self.blocks[(x, y, z)]
+        c = self.cols.get((x, z))
+        if c is not None and y > c[0]:
+            return "minecraft:air"
+        return None
+
+    def height(self, x, z):
+        c = self.cols.get((x, z))
+        return c[0] if c else self.base.height(x, z)
+
+    def is_water(self, x, z):
+        c = self.cols.get((x, z))
+        return c[1] == -1 if c else self.base.is_water(x, z)
+
+    def is_tree(self, x, z):
+        return False if (x, z) in self.cols else self.base.is_tree(x, z)
+
+
+def demolish(world, footprint_data):
+    """
+    Removes a wall/road built by the program and puts the ground back as it was: air above the
+    old ground, the recorded original blocks below it. Returns the number of blocks changed.
+    """
+    from world_extractor import is_natural_terrain
+    names = footprint_data.get("surfaces", [])
+    changed = 0
+    states = {}
+
+    def state(name):
+        if name not in states:
+            props = {"level": "0"} if name.endswith(":water") or name.endswith(":lava") else {}
+            states[name] = to_state({"Name": name, "Properties": props})
+        return states[name]
+
+    for col in footprint_data.get("columns", ()):
+        x, z, g, lo, hi, surf = col[:6]
+        original = col[6:]
+        for y in range(g + 1, hi + 1):
+            name = world.get_block_name(x, y, z)
+            if name is not None and name not in AIR_NAMES and world.set_block(x, y, z, AIR_STATE):
+                changed += 1
+        for i, b in enumerate(original):
+            y = lo + i
+            target = names[b] if 0 <= b < len(names) else None
+            name = world.get_block_name(x, y, z)
+            if target is None or name is None or name == target:
+                continue
+            if world.set_block(x, y, z, state(target)):
+                changed += 1
+        if surf == -1:
+            # piles and piers that went down to the bottom of the water
+            water = state("minecraft:water")
+            for y in range(min(lo, g) - 1, min(lo, g) - MAX_PILLAR_DEPTH, -1):
+                name = world.get_block_name(x, y, z)
+                if name is None or name in AIR_NAMES or name.endswith("water") or is_natural_terrain(name):
+                    break
+                if world.set_block(x, y, z, water):
+                    changed += 1
+    return changed
 
 
 def paint_path(world, cells, block="minecraft:dirt_path"):

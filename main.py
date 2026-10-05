@@ -34,8 +34,9 @@ import catalog
 import structure_generators as sgen
 import village_generator as vgen
 import walls
+import roads
 import world_extractor
-from world_editor import WorldTerrain
+from world_editor import WorldTerrain, RecordedTerrain, footprint, footprint_to_text, footprint_from_text
 from map_viewer import MapViewer
 from scraper import search_minecraft_schematics, download_structure, CURATED_ONLINE_CATALOG
 
@@ -668,10 +669,25 @@ class MinecraftBuilderApp(QMainWindow):
         self.wall_gate_clear_btn.clicked.connect(self.clear_wall_gates)
         gate_row.addWidget(self.wall_gate_clear_btn)
         wl.addLayout(gate_row)
+        self.wall_edit_btn = QPushButton("Modifica il perimetro (trascina i punti)")
+        self.wall_edit_btn.setEnabled(False)
+        self.wall_edit_btn.clicked.connect(lambda: self.start_line_edit("walls"))
+        wl.addWidget(self.wall_edit_btn)
         self.wall_stage_btn = QPushButton("Metti in coda le mura")
         self.wall_stage_btn.setEnabled(False)
         self.wall_stage_btn.clicked.connect(self.stage_walls)
         wl.addWidget(self.wall_stage_btn)
+        wl.addWidget(QLabel("Mura gia' costruite:"))
+        self.built_walls_combo = QComboBox()
+        wl.addWidget(self.built_walls_combo)
+        built_row = QHBoxLayout()
+        self.built_walls_edit_btn = QPushButton("Modifica")
+        self.built_walls_edit_btn.clicked.connect(lambda: self.edit_built_line("walls"))
+        built_row.addWidget(self.built_walls_edit_btn)
+        self.built_walls_demolish_btn = QPushButton("Demolisci")
+        self.built_walls_demolish_btn.clicked.connect(lambda: self.demolish_built_line("walls"))
+        built_row.addWidget(self.built_walls_demolish_btn)
+        wl.addLayout(built_row)
         self.wall_info = hint("Suggerisci il perimetro: le mura vengono proposte intorno alle tue costruzioni vicino "
                               "al giocatore, con la porta dove passa una strada o dove il terreno e' libero e "
                               "piano. Oppure disegnale: clic sui vertici (linee a 0/45/90 gradi, Shift per "
@@ -689,6 +705,76 @@ class MinecraftBuilderApp(QMainWindow):
         self.wall_plan_input = None
         wl.addStretch()
         self.tabs.addTab(wall_tab, "Mura")
+
+        # Tab: roads
+        road_tab = QWidget()
+        rl = QVBoxLayout(road_tab)
+        rl.setContentsMargins(6, 6, 6, 6)
+        rl.addWidget(QLabel("Stile della strada:"))
+        self.road_style = QComboBox()
+        for key, spec in roads.ROAD_STYLES.items():
+            self.road_style.addItem(spec["title"], key)
+        self.road_style.setCurrentIndex(1)
+        rl.addWidget(self.road_style)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Larghezza:"))
+        self.road_width = QSpinBox()
+        self.road_width.setRange(1, 9)
+        self.road_width.setValue(3)
+        self.road_width.setSuffix(" blocchi")
+        row.addWidget(self.road_width)
+        row.addStretch()
+        rl.addLayout(row)
+        row = QHBoxLayout()
+        self.road_lamps = QCheckBox("Lampioni ogni")
+        self.road_lamps.setChecked(True)
+        row.addWidget(self.road_lamps)
+        self.road_lamp_spacing = QSpinBox()
+        self.road_lamp_spacing.setRange(6, 48)
+        self.road_lamp_spacing.setValue(12)
+        self.road_lamp_spacing.setSuffix(" blocchi")
+        row.addWidget(self.road_lamp_spacing)
+        row.addStretch()
+        rl.addLayout(row)
+        self.road_kerbs = QCheckBox("Cordoli ai lati (strade larghe almeno 3)")
+        self.road_kerbs.setChecked(True)
+        rl.addWidget(self.road_kerbs)
+        self.road_draw_btn = QPushButton("Disegna la strada sulla mappa")
+        self.road_draw_btn.setObjectName("action_btn")
+        self.road_draw_btn.clicked.connect(self.start_road_mode)
+        rl.addWidget(self.road_draw_btn)
+        self.road_edit_btn = QPushButton("Modifica il tracciato (trascina i punti)")
+        self.road_edit_btn.setEnabled(False)
+        self.road_edit_btn.clicked.connect(lambda: self.start_line_edit("roads"))
+        rl.addWidget(self.road_edit_btn)
+        self.road_stage_btn = QPushButton("Metti in coda la strada")
+        self.road_stage_btn.setEnabled(False)
+        self.road_stage_btn.clicked.connect(self.stage_road)
+        rl.addWidget(self.road_stage_btn)
+        self.road_info = hint("Clicca i punti del tracciato (linee a 0/45/90 gradi, Shift per linee libere), "
+                              "Invio o doppio clic per finire, Backspace toglie l'ultimo punto. Vicino a una "
+                              "strada esistente il punto si aggancia da solo (cerchio azzurro): le strade fatte "
+                              "col programma e i sentieri o le strade lastricate gia' presenti nel mondo. Le "
+                              "estremita' entro 8 blocchi da una strada vengono collegate a quella.")
+        rl.addWidget(self.road_info)
+        rl.addWidget(QLabel("Strade gia' costruite:"))
+        self.built_roads_combo = QComboBox()
+        rl.addWidget(self.built_roads_combo)
+        built_row = QHBoxLayout()
+        self.built_roads_edit_btn = QPushButton("Modifica")
+        self.built_roads_edit_btn.clicked.connect(lambda: self.edit_built_line("roads"))
+        built_row.addWidget(self.built_roads_edit_btn)
+        self.built_roads_demolish_btn = QPushButton("Demolisci")
+        self.built_roads_demolish_btn.clicked.connect(lambda: self.demolish_built_line("roads"))
+        built_row.addWidget(self.built_roads_demolish_btn)
+        rl.addLayout(built_row)
+        rl.addWidget(hint("Modifica: il tracciato o il perimetro tornano sulla mappa con i punti azzurri; "
+                          "trascinali, doppio clic su un tratto aggiunge un punto, clic destro su un punto lo "
+                          "toglie. In coda vanno la demolizione della versione vecchia (il terreno torna com'era "
+                          "prima) e la costruzione della nuova: premi Inietta. Demolisci toglie e basta."))
+        self.road_plan_input = None
+        rl.addStretch()
+        self.tabs.addTab(road_tab, "Strade")
 
         # Tab 5: cut an area of a world as a structure
         cut_tab = QWidget()
@@ -722,6 +808,8 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer.area_selected.connect(self.on_area_selected)
         self.map_viewer.point_selected.connect(self.on_map_point)
         self.map_viewer.polygon_finished.connect(self.on_polygon_finished)
+        self.map_viewer.preview_edited.connect(self.on_preview_edited)
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         self.map_viewer.mode_cancelled.connect(lambda: self.log("Operazione annullata."))
         self.map_viewer.game_structures_changed.connect(self.update_structure_jump_list)
 
@@ -1636,8 +1724,7 @@ class MinecraftBuilderApp(QMainWindow):
     def _registry_sizes(self):
         data = self._read_registry()
         dim = self.current_dimension_id()
-        return {"bridges": len(data.get("bridges", {}).get(dim, [])),
-                "structures": len(data.get("structures", {}).get(dim, []))}
+        return {key: len(data.get(key, {}).get(dim, [])) for key in ("bridges", "structures", "walls", "roads")}
 
     def push_undo(self, backups, before, names):
         """Remembers the backups of an injection (in the world folder, so undo works after a restart)."""
@@ -1699,10 +1786,15 @@ class MinecraftBuilderApp(QMainWindow):
             return
         dim = last.get("dimension", self.current_dimension_id())
         before = last.get("before", {})
-        for key in ("bridges", "structures"):
+        for key in ("bridges", "structures", "walls", "roads"):
             lst = data.get(key, {}).get(dim)
             if lst is not None and key in before:
                 del lst[before[key]:]
+        token = before.get("token")
+        for key in ("walls", "roads", "structures"):   # builds that this injection replaced stand again
+            for r in data.get(key, {}).get(dim, []):
+                if token and r.get("removed") == token:
+                    del r["removed"]
         history.pop()
         self._write_registry(data)
         self.log(f"Iniezione del {last['time']} annullata: ripristinate {len(regions)} regioni dai backup.")
@@ -1733,11 +1825,13 @@ class MinecraftBuilderApp(QMainWindow):
                 data = json.load(f)
         except (OSError, ValueError, TypeError):
             return []
-        return data.get("structures", {}).get(self.current_dimension_id(), [])
+        return [s for s in data.get("structures", {}).get(self.current_dimension_id(), []) if not s.get("removed")]
 
     def refresh_placed_structures(self):
         self.map_viewer.set_placed_structures(self.placed_structures())
         self.update_structure_jump_list()
+        if hasattr(self, "built_roads_combo"):
+            self.refresh_built_lines()
 
     def record_structures(self, items):
         """Remembers what was injected and where, so the map can show it."""
@@ -1749,7 +1843,7 @@ class MinecraftBuilderApp(QMainWindow):
         for i in items:
             s = i.get("structure")
             name = i.get("name", "")
-            if s is None or name == "lampione" or name.startswith("Mura - "):
+            if s is None or name == "lampione" or name.startswith(("Mura - ", "Strada - ")):
                 continue  # the whole wall is shown by the map itself, the gates are listed
             entry = info.get(name, {})
             stem = os.path.splitext(name)[0]
@@ -1765,6 +1859,8 @@ class MinecraftBuilderApp(QMainWindow):
             new.append({"name": name, "title": title, "category": category,
                         "x": int(i["world_x"]), "y": int(i["y_coord"]), "z": int(i["world_z"]),
                         "w": s.width, "h": s.height, "l": s.length, "date": time.strftime("%Y-%m-%d %H:%M")})
+            if i.get("line_id"):
+                new[-1]["line"] = i["line_id"]
         if not new:
             return
         try:
@@ -1859,13 +1955,19 @@ class MinecraftBuilderApp(QMainWindow):
         if not self.current_region:
             self.log("Apri prima un mondo.")
             return
+        self.poly_purpose = "walls"
         self.map_viewer.wall_preview = None
+        self.map_viewer.poly_closable = True
+        self.map_viewer.snap_targets = []
         self.map_viewer.set_mode("polygon")
         self.map_viewer.setFocus()
         self.log("Mura: clicca i vertici del perimetro. Clic sul primo punto o Invio per chiudere, doppio clic "
                  "per un tratto aperto, Backspace toglie l'ultimo punto, Esc annulla.")
 
     def on_polygon_finished(self, pts, closed):
+        if getattr(self, "poly_purpose", "walls") == "roads":
+            self.on_road_finished(pts)
+            return
         world_pts = [self._world_of(x, z) for x, z in pts]
         ref = self._reference_point()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -1924,17 +2026,21 @@ class MinecraftBuilderApp(QMainWindow):
 
     def update_wall_preview(self):
         inp = self.wall_plan_input
+        self.wall_edit_btn.setEnabled(bool(inp))
         if not inp or not self.current_region:
-            self.map_viewer.wall_preview = None
+            if getattr(self, "preview_owner", None) in (None, "walls"):
+                self.map_viewer.wall_preview = None
             self.wall_stage_btn.setEnabled(False)
             self.map_viewer.update()
             return
+        self.preview_owner = "walls"
         ox, oz = self.current_region.rx * 512, self.current_region.rz * 512
         self.map_viewer.wall_preview = {
             "points": [(x - ox, z - oz) for x, z in inp["points"]], "closed": inp["closed"],
             "gates": [(x - ox, z - oz) for x, z in inp["gates"]]}
         length = walls.Path(inp["points"], inp["closed"]).length
-        self.wall_info.setText(f"Perimetro: {length:.0f} blocchi, {len(inp['points'])} vertici, "
+        self.wall_info.setText((f"Modifica di mura gia' costruite. " if inp.get("replaces") else "")
+                               + f"Perimetro: {length:.0f} blocchi, {len(inp['points'])} vertici, "
                                f"{len(inp['gates'])} porte. Premi 'Metti in coda le mura' quando va bene.")
         self.wall_stage_btn.setEnabled(True)
         self.map_viewer.update()
@@ -1943,23 +2049,290 @@ class MinecraftBuilderApp(QMainWindow):
         inp = self.wall_plan_input
         if not inp:
             return
+        old = self._built_record("walls", inp.get("replaces"))
+        settings = {"style": self.wall_style.currentData(), "height": self.wall_height.value(),
+                    "towers": self.wall_towers.isChecked(), "spacing": self.wall_spacing.value(),
+                    "gate_type": self.wall_gate_type.currentData(), "lights": self.wall_lights.isChecked()}
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            terrain = self._planning_terrain(old)
             plan = walls.plan_walls(
-                inp["points"], inp["closed"], self.wall_style.currentData(), self.wall_height.value(),
-                WorldTerrain(self._edit_world()), towers=self.wall_towers.isChecked(),
-                tower_spacing=self.wall_spacing.value(), gates=inp["gates"],
-                gate_type=self.wall_gate_type.currentData(), lights=self.wall_lights.isChecked(),
-                outside_ref=self._reference_point())
+                inp["points"], inp["closed"], settings["style"], settings["height"], terrain,
+                towers=settings["towers"], tower_spacing=settings["spacing"], gates=inp["gates"],
+                gate_type=settings["gate_type"], lights=settings["lights"], outside_ref=self._reference_point())
+            fp = footprint(plan["placements"], terrain) if plan["placements"] else None
         finally:
             QApplication.restoreOverrideCursor()
         self.log(plan["report"])
         if not plan["placements"]:
             QMessageBox.warning(self, "Mura", plan["report"])
             return
-        self.add_staged({"kind": "group", "items": plan["placements"], "name": "Mura"}, plan["report"])
+        record = {"id": f"mura-{time.time_ns()}", "date": time.strftime("%Y-%m-%d %H:%M"),
+                  "title": walls.WALL_STYLES[settings["style"]]["title"],
+                  "points": [list(p) for p in inp["points"]], "closed": inp["closed"],
+                  "gates": [list(g) for g in inp["gates"]], "settings": settings, "footprint": footprint_to_text(fp)}
+        self._stage_line("walls", "Mura", plan["placements"], record, old, plan["report"])
         self.wall_plan_input = None
         self.update_wall_preview()
+
+    # ---- Roads ----
+    def _grid_lines(self, kind, exclude=None):
+        ox, oz = self.current_region.rx * 512, self.current_region.rz * 512
+        return [[(x - ox, z - oz) for x, z in r["points"]] for r in self.built_lines(kind) if r.get("id") != exclude]
+
+    def start_road_mode(self):
+        if not self.current_region:
+            self.log("Apri prima un mondo.")
+            return
+        self.poly_purpose = "roads"
+        self.road_plan_input = None
+        self.update_road_preview()
+        self.map_viewer.poly_closable = False
+        self.map_viewer.snap_targets = self._grid_lines("roads")
+        self.map_viewer.set_mode("polygon")
+        self.map_viewer.setFocus()
+        self.log("Strada: clicca i punti del tracciato, Invio o doppio clic per finire, Backspace toglie "
+                 "l'ultimo punto, Esc annulla. Vicino a una strada esistente il punto si aggancia da solo.")
+
+    def on_road_finished(self, pts):
+        world_pts = [self._world_of(x, z) for x, z in pts]
+        existing = [r["points"] for r in self.built_lines("roads")]
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            world_pts, msgs = roads.snap_endpoints(world_pts, existing, self._edit_world())
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.road_plan_input = {"points": world_pts}
+        self.update_road_preview()
+        for m in msgs:
+            self.log(m)
+        self.log(f"Tracciato disegnato ({len(world_pts)} punti). Puoi modificarlo o metterlo in coda.")
+
+    def update_road_preview(self):
+        inp = self.road_plan_input
+        self.road_edit_btn.setEnabled(bool(inp))
+        self.road_stage_btn.setEnabled(bool(inp))
+        if not inp or not self.current_region:
+            if getattr(self, "preview_owner", None) == "roads":
+                self.map_viewer.wall_preview = None
+            self.map_viewer.update()
+            return
+        self.preview_owner = "roads"
+        ox, oz = self.current_region.rx * 512, self.current_region.rz * 512
+        self.map_viewer.wall_preview = {"points": [(x - ox, z - oz) for x, z in inp["points"]],
+                                        "closed": False, "gates": []}
+        length = walls.Path(inp["points"], False).length
+        self.road_info.setText((f"Modifica di una strada gia' costruita. " if inp.get("replaces") else "")
+                               + f"Strada: {length:.0f} blocchi, {len(inp['points'])} punti. Premi 'Metti in "
+                               f"coda la strada' quando va bene.")
+        self.map_viewer.update()
+
+    def stage_road(self):
+        inp = self.road_plan_input
+        if not inp:
+            return
+        old = self._built_record("roads", inp.get("replaces"))
+        settings = {"style": self.road_style.currentData(), "width": self.road_width.value(),
+                    "lamps": self.road_lamps.isChecked(), "lamp_spacing": self.road_lamp_spacing.value(),
+                    "kerbs": self.road_kerbs.isChecked()}
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            terrain = self._planning_terrain(old)
+            plan = roads.plan_road(inp["points"], settings["style"], settings["width"], terrain,
+                                   lamps=settings["lamps"], lamp_spacing=settings["lamp_spacing"],
+                                   kerbs=settings["kerbs"])
+            fp = footprint(plan["placements"], terrain) if plan["placements"] else None
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.log(plan["report"])
+        if not plan["placements"]:
+            QMessageBox.warning(self, "Strade", plan["report"])
+            return
+        record = {"id": f"strada-{time.time_ns()}", "date": time.strftime("%Y-%m-%d %H:%M"),
+                  "title": roads.ROAD_STYLES[settings["style"]]["title"],
+                  "points": [list(p) for p in inp["points"]], "settings": settings,
+                  "footprint": footprint_to_text(fp)}
+        self._stage_line("roads", "Strada", plan["placements"], record, old, plan["report"])
+        self.road_plan_input = None
+        self.update_road_preview()
+
+    # ---- Walls and roads already built: edit, demolish ----
+    def built_lines(self, kind):
+        """Walls ('walls') or roads ('roads') built with the program in this dimension, still standing."""
+        if not self.current_world_path:
+            return []
+        return [r for r in self._read_registry().get(kind, {}).get(self.current_dimension_id(), [])
+                if not r.get("removed")]
+
+    def _built_record(self, kind, rec_id):
+        if not rec_id:
+            return None
+        return next((r for r in self.built_lines(kind) if r.get("id") == rec_id), None)
+
+    def _planning_terrain(self, old_record):
+        """Terrain for the planner; inside an old build that is being replaced, its original ground."""
+        base = WorldTerrain(self._edit_world())
+        if old_record is None:
+            return base
+        return RecordedTerrain(base, [footprint_from_text(old_record.get("footprint"))])
+
+    def _stage_line(self, kind, label, placements, record, old, report):
+        """Queues a wall/road: the demolition of the version it replaces first, then the new one."""
+        items = []
+        if old is not None:
+            items.append({"kind": "demolish", "name": f"{label} precedente",
+                          "footprint": footprint_from_text(old.get("footprint"))})
+        placements[0]["line_record"] = (kind, record, old.get("id") if old else None)
+        for p in placements:
+            p["line_id"] = record["id"]          # gates & co. disappear from the map with their wall
+        items.extend(placements)
+        title = f"{label} ({record['title']})" + (" - modifica" if old else "")
+        self.add_staged({"kind": "group", "items": items, "name": title}, title)
+        self.log(report)
+
+    def _selected_built(self, kind):
+        combo = self.built_walls_combo if kind == "walls" else self.built_roads_combo
+        rec_id = combo.currentData()
+        rec = self._built_record(kind, rec_id)
+        if rec is None:
+            self.log("Non ci sono " + ("mura" if kind == "walls" else "strade") + " costruite col programma "
+                     "in questa dimensione.")
+        return rec
+
+    def edit_built_line(self, kind):
+        rec = self._selected_built(kind)
+        if rec is None:
+            return
+        st = rec.get("settings", {})
+        pts = [tuple(p) for p in rec["points"]]
+        if kind == "walls":
+            self._set_combo(self.wall_style, st.get("style"))
+            self.wall_height.setValue(st.get("height", self.wall_height.value()))
+            self.wall_towers.setChecked(st.get("towers", True))
+            self.wall_spacing.setValue(st.get("spacing", self.wall_spacing.value()))
+            self._set_combo(self.wall_gate_type, st.get("gate_type"))
+            self.wall_lights.setChecked(st.get("lights", True))
+            self.wall_plan_input = {"points": pts, "closed": rec.get("closed", True),
+                                    "gates": [tuple(g) for g in rec.get("gates", [])], "replaces": rec["id"]}
+            self.update_wall_preview()
+        else:
+            self._set_combo(self.road_style, st.get("style"))
+            self.road_width.setValue(st.get("width", self.road_width.value()))
+            self.road_lamps.setChecked(st.get("lamps", True))
+            self.road_lamp_spacing.setValue(st.get("lamp_spacing", self.road_lamp_spacing.value()))
+            self.road_kerbs.setChecked(st.get("kerbs", True))
+            self.road_plan_input = {"points": pts, "replaces": rec["id"]}
+            self.update_road_preview()
+        xs, zs = [p[0] for p in pts], [p[1] for p in pts]
+        self.center_map_on((min(xs) + max(xs)) // 2, (min(zs) + max(zs)) // 2)
+        self.start_line_edit(kind)
+
+    def demolish_built_line(self, kind):
+        rec = self._selected_built(kind)
+        if rec is None:
+            return
+        what = "le mura" if kind == "walls" else "la strada"
+        if QMessageBox.question(self, "Demolisci", f"Demolire {what} '{rec['title']}' del {rec['date']}? Il "
+                                f"terreno torna com'era prima della costruzione (la demolizione va in coda: "
+                                f"premi Inietta).") != QMessageBox.StandardButton.Yes:
+            return
+        item = {"kind": "demolish", "name": f"Demolizione {rec['title']}",
+                "footprint": footprint_from_text(rec.get("footprint")), "line_record": (kind, None, rec["id"])}
+        self.add_staged({"kind": "group", "items": [item], "name": item["name"]}, item["name"])
+
+    @staticmethod
+    def _set_combo(combo, data):
+        idx = combo.findData(data)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def start_line_edit(self, kind):
+        inp = self.wall_plan_input if kind == "walls" else self.road_plan_input
+        if not inp:
+            return
+        self.edit_target = kind
+        if kind == "walls":
+            self.update_wall_preview()
+            self.map_viewer.snap_targets = []
+        else:
+            self.update_road_preview()
+            self.map_viewer.snap_targets = self._grid_lines("roads", exclude=inp.get("replaces"))
+        self.map_viewer.set_mode("edit_poly")
+        self.map_viewer.setFocus()
+        self.log("Modifica: trascina i punti azzurri, doppio clic su un tratto aggiunge un punto, clic destro "
+                 "su un punto lo toglie, Esc per finire. Poi metti in coda.")
+
+    def on_preview_edited(self, pts):
+        world_pts = [self._world_of(x, z) for x, z in pts]
+        if getattr(self, "edit_target", "walls") == "roads":
+            if self.road_plan_input is not None:
+                self.road_plan_input["points"] = world_pts
+                self.update_road_preview()
+            return
+        inp = self.wall_plan_input
+        if inp is None:
+            return
+        inp["points"] = world_pts
+        path = walls.Path(world_pts, inp["closed"])
+        kept = []
+        for gx, gz in inp["gates"]:
+            dist, sp, _ = path.project(gx, gz)
+            if dist <= 12:
+                px, pz, _, _ = path.at(sp)
+                kept.append((int(round(px)), int(round(pz))))
+        if len(kept) < len(inp["gates"]):
+            self.log("Una porta era troppo lontana dal nuovo perimetro ed e' stata tolta: aggiungila di nuovo.")
+        inp["gates"] = kept
+        self.update_wall_preview()
+
+    def on_tab_changed(self, index):
+        name = self.tabs.tabText(index)
+        if name == "Mura" and self.wall_plan_input:
+            self.update_wall_preview()
+        elif name == "Strade" and self.road_plan_input:
+            self.update_road_preview()
+
+    def refresh_built_lines(self):
+        """Built walls and roads: drawn on the map and listed in the two tabs."""
+        lines = []
+        for kind, combo in (("walls", self.built_walls_combo), ("roads", self.built_roads_combo)):
+            combo.clear()
+            recs = self.built_lines(kind)
+            for r in recs:
+                xs = [p[0] for p in r["points"]]
+                zs = [p[1] for p in r["points"]]
+                combo.addItem(f"{r['title']} - {r['date']} (X {sum(xs) // len(xs)}, Z {sum(zs) // len(zs)})",
+                              r["id"])
+                lines.append({"kind": kind, "points": [tuple(p) for p in r["points"]],
+                              "closed": r.get("closed", False), "title": r["title"]})
+            if not recs:
+                combo.addItem("Nessuna" if kind == "roads" else "Nessuna", None)
+        self.map_viewer.built_lines = lines
+        self.map_viewer.update()
+
+    def record_lines(self, items, token):
+        """Remembers the walls/roads just built (and marks the ones they replaced or demolished)."""
+        records = [i["line_record"] for i in items if i.get("line_record")]
+        if not records or not self.bridges_file():
+            return
+        data = self._read_registry()
+        dim = self.current_dimension_id()
+        for kind, rec, replaces in records:
+            lst = data.setdefault(kind, {}).setdefault(dim, [])
+            if replaces:
+                for r in lst:
+                    if r.get("id") == replaces and not r.get("removed"):
+                        r["removed"] = token
+                for st in data.get("structures", {}).get(dim, []):
+                    if st.get("line") == replaces and not st.get("removed"):
+                        st["removed"] = token
+            if rec:
+                lst.append(rec)
+        try:
+            self._write_registry(data)
+        except OSError as e:
+            self.log(f"Avviso: impossibile salvare l'elenco di mura e strade: {e}")
+        self.refresh_placed_structures()
 
     def on_village_center(self, grid_x, grid_z):
         self.map_viewer.set_mode("place")
@@ -2404,8 +2777,10 @@ class MinecraftBuilderApp(QMainWindow):
         self.log("Tutte le strutture sono state iniettate con successo!")
         self.terrain = None
         before = self._registry_sizes()
+        before["token"] = str(time.time_ns())
         self.record_bridges(getattr(self, "last_injected", None) or [])
         self.record_structures(getattr(self, "last_injected", None) or [])
+        self.record_lines(getattr(self, "last_injected", None) or [], before["token"])
         world = getattr(self.injection_thread, "world", None)
         self.push_undo(getattr(world, "last_backups", []), before,
                        [i.get("name", "") for i in (getattr(self, "last_injected", None) or []) if "structure" in i])

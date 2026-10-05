@@ -34,6 +34,17 @@
   - **Due leve per ogni porta** (portone e ponte levatoio): una sul muro interno del corpo di guardia, accanto al passaggio, e una nascosta fuori in un cespuglio accanto alla strada d'arrivo. Funzionano come i due interruttori della luce delle scale: ogni scatto di una delle due apre o chiude la porta, quindi si apre da fuori, si entra e si richiude da dentro. La logica è un OR esclusivo fatto con due comparatori in sottrazione, verificato con un simulatore di redstone nei test. Nel ponte levatoio le leve tengono il ponte alzato, i sensori lo alzano da soli quando qualcuno si avvicina.
   - Ponte levatoio automatico: davanti alla porta c'è un fossato. Due sensori sculk nascosti sotto le strade, fuori dalla portata d'ascolto dei pistoni (così non si riattivano da soli), sentono chi si avvicina e 6 pistoni appiccicosi fanno emergere il ponte dall'acqua; un ramo ritardato con ripetitori lo tiene su durante il tempo di ricarica dei sensori e per circa due secondi dopo l'ultimo movimento, il tempo di attraversare. Il circuito è verificato da un simulatore di redstone nei test.
   - Luci automatiche: nel passaggio le lampade si accendono al movimento (sensori sculk) e sulle torri, sulla porta e lungo le mura si accendono da sole di notte (rilevatori di luce diurna invertiti).
+  - **Allineamento mentre disegni**: avvicinandoti al primo punto la mappa dice se la chiusura è allineata (verde) o no (arancione) e mostra l'angolo che la allineerebbe; il tasto **C** chiude il perimetro aggiungendo quell'angolo.
+- 🛣️ **Strade** (scheda *Strade*): cinque stili (sentiero, ciottoli, lastricata, deserto, ardesia), larghezza da 1 a 9, lampioni a intervallo regolabile e cordoli.
+  - Si disegnano come le mura: clic sui punti (0/45/90 gradi, Shift per linee libere), Invio o doppio clic per finire.
+  - **Aggancio alle strade esistenti**: vicino a una strada già costruita col programma il punto si aggancia da solo (cerchio azzurro); le estremità entro 8 blocchi da una strada, anche un sentiero o una strada lastricata già presente nel mondo, vengono collegate a quella.
+  - Il fondo segue il terreno salendo o scendendo al massimo di un blocco alla volta (con un mezzo blocco su ogni gradino): riempie gli avvallamenti, taglia le piccole gobbe e toglie gli alberi d'intralcio. Sull'acqua diventa una passerella di legno su pali.
+- ✏️ **Modifica e demolizione di mura e strade già costruite**:
+  - Le mura e le strade costruite col programma vengono ricordate nel mondo e disegnate sulla mappa (mura a tratto e punto, strade in marrone), con l'elenco nelle schede *Mura* e *Strade*.
+  - **Modifica**: il perimetro o il tracciato tornano sulla mappa con i punti azzurri: trascinali, doppio clic su un tratto aggiunge un punto, clic destro su un punto lo toglie. Lo stesso vale per un perimetro appena disegnato e non ancora costruito (*Modifica il perimetro*).
+  - In coda vanno la demolizione della versione vecchia e la costruzione della nuova, ripianificata sul terreno originale.
+  - **Demolisci**: toglie l'opera e rimette il terreno esattamente com'era, perché al momento della costruzione vengono memorizzati i blocchi originali di ogni colonna toccata.
+  - Anche modifiche e demolizioni si possono annullare con *Annulla ultima iniezione*.
 - 🏘️ **Generatore di villaggi** (scheda *Villaggio*): pianura, borgo medievale o nordico, in tre dimensioni. Crea piazza, strade a croce che seguono il terreno, edifici con la porta rivolta verso la strada, fattorie, sentieri e lampioni, evitando acqua, pendii e zone non generate.
 - ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura, **senza limiti di dimensione** (il ritaglio gira in background con l'avanzamento nel log: un'area di 400×400 con il terreno, 3 milioni di blocchi, si estrae in circa 10 secondi). In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno.
 - 📍 **Rilevamento e Tracciamento Giocatore**:
@@ -123,6 +134,7 @@
 ├── catalog.py              # Catalogo delle strutture con categorie in italiano
 ├── structure_generators.py # Ponti parametrici, ponte tra due sponde con profilo del terreno e materiali del posto
 ├── walls.py                # Mura, torri, porte, ponte levatoio a pistoni con sensori sculk, luci automatiche
+├── roads.py                # Strade che seguono il terreno, passerelle sull'acqua, aggancio alle strade esistenti
 ├── village_generator.py    # Generatore di villaggi
 ├── world_extractor.py      # Ritaglio di zone di mondo come strutture
 ├── nbt_codec.py            # Codec puro Python per la lettura/scrittura di file NBT
