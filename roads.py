@@ -195,7 +195,7 @@ def plan_road(points, style, width, terrain, lamps=True, lamp_spacing=12, kerbs=
         edge = kerbs and st["edge"] and dist > half - 0.75 and width >= 3
         if water[i] is not None:
             put(x, t, z, f"{wood}_planks")
-            if dist > half - 0.75:
+            if dist > half - 0.75 and width >= 2:
                 put(x, t + 1, z, f"{wood}_fence")
                 if i % 4 == 0:                        # a pile down to the bottom every 4 blocks
                     put(x, t - 1, z, f"{wood}_log", axis="y")
@@ -208,7 +208,7 @@ def plan_road(points, style, width, terrain, lamps=True, lamp_spacing=12, kerbs=
                     put(x, y, z, st["base"])
         # clear the space above: trees, bushes, the top of small bumps
         hi = max(t + 3, (g or t) + 1)
-        for y in range(t + 1 + (1 if water[i] is not None and dist > half - 0.75 else 0), hi + 1):
+        for y in range(t + 1 + (1 if water[i] is not None and dist > half - 0.75 and width >= 2 else 0), hi + 1):
             put(x, y, z, AIR)
         # slab on the lower side of every step, to walk up without jumping
         nxt = min(n - 1, i + 1)

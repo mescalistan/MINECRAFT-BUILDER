@@ -43,7 +43,11 @@ def block_at(region, x, y, z):
 
 class NbtTests(unittest.TestCase):
     def test_templates_roundtrip(self):
-        for f in sorted(f for f in os.listdir(TEMPLATES) if f.endswith(".nbt")):
+        # the library only: the user's own cuts can be huge (millions of blocks as generic tags)
+        import json
+        with open(os.path.join(TEMPLATES, "catalog.json"), encoding="utf-8") as fh:
+            library = {e["file"] for e in json.load(fh)}
+        for f in sorted(f for f in os.listdir(TEMPLATES) if f in library):
             tag, name = load_nbt(os.path.join(TEMPLATES, f))
             data = nbt_to_bytes(tag, name)
             self.assertEqual(parse_nbt_bytes(data), (tag, name), f)
@@ -157,7 +161,10 @@ class WorldLocatorTests(unittest.TestCase):
 
 class RotationTests(unittest.TestCase):
     def test_four_rotations_are_identity(self):
-        for f in sorted(f for f in os.listdir(TEMPLATES) if f.endswith(".nbt")):
+        import json
+        with open(os.path.join(TEMPLATES, "catalog.json"), encoding="utf-8") as fh:
+            library = {e["file"] for e in json.load(fh)}     # not the user's (possibly huge) cuts
+        for f in sorted(f for f in os.listdir(TEMPLATES) if f in library):
             s = Structure.load(os.path.join(TEMPLATES, f))
             r = s.rotate(90).rotate(90).rotate(90).rotate(90)
             self.assertEqual(r.blocks, s.blocks, f)

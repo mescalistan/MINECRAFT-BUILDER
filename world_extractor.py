@@ -13,7 +13,7 @@ la quota giusta all'incolla.
 import os
 import re
 
-from nbt_codec import save_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String
+from nbt_codec import save_nbt, TAG_Compound, TAG_List, TAG_Int, TAG_String, TAG_Double, TAG_Int_Array
 from mca_codec import AIR_NAMES
 
 
@@ -23,7 +23,7 @@ _NATURAL_EXACT = {
     "sandstone", "red_sandstone", "terracotta", "snow_block", "snow", "ice", "packed_ice", "blue_ice",
     "powder_snow", "bedrock", "water", "lava", "bubble_column", "netherrack", "soul_sand", "soul_soil", "basalt",
     "blackstone", "magma_block", "end_stone", "moss_block", "moss_carpet", "smooth_basalt", "budding_amethyst",
-    "amethyst_block", "sculk", "sculk_vein", "sculk_sensor", "sculk_catalyst", "sculk_shrieker", "obsidian",
+    "amethyst_block", "sculk", "sculk_vein", "sculk_sensor", "sculk_catalyst", "sculk_shrieker",
     "crimson_nylium", "warped_nylium", "glowstone", "nether_wart_block", "warped_wart_block", "shroomlight",
     "mangrove_roots", "muddy_mangrove_roots", "bee_nest", "suspicious_sand", "suspicious_gravel", "infested_stone",
     "pointed_dripstone", "cobweb", "pale_moss_block", "pale_moss_carpet",
@@ -31,8 +31,12 @@ _NATURAL_EXACT = {
 _NATURAL_PATTERNS = re.compile(
     r"(_ore$|^raw_|grass$|fern$|flower|tulip|poppy|dandelion|orchid|allium|bluet|daisy|cornflower|lily|"
     r"sunflower|lilac|rose_bush|peony|petals|bush|sapling|propagule|mushroom|fungus|roots$|vine|lichen|kelp|"
-    r"seagrass|sea_pickle|coral|sugar_cane|cactus|bamboo|sweet_berry|cocoa|dripleaf|spore_blossom|azalea|"
-    r"amethyst_cluster|_bud$|hanging_moss|frogspawn|eyeblossom)")
+    r"seagrass|sea_pickle|coral|sugar_cane|cactus|^bamboo$|bamboo_sapling|sweet_berry|cocoa|dripleaf|"
+    r"spore_blossom|azalea|amethyst_cluster|_bud$|hanging_moss|frogspawn|eyeblossom)")
+# names matched above that are building blocks all the same
+_BUILT_EXCEPTIONS = re.compile(r"(_pot$|_planks$|_mosaic|^dried_kelp_block$|_block$(?<!^bamboo_block$)|coral_fan)")
+# natural in the desert under the sand, a building block when it stands on the ground (desert houses)
+_STANDS_ON_GROUND = {"sandstone", "red_sandstone", "cut_sandstone", "smooth_sandstone"}
 
 
 def short(name):
@@ -41,7 +45,11 @@ def short(name):
 
 def is_natural_terrain(name):
     n = short(name)
-    return n in _NATURAL_EXACT or bool(_NATURAL_PATTERNS.search(n)) and not n.startswith("potted_")
+    if n in _NATURAL_EXACT:
+        return True
+    return bool(_NATURAL_PATTERNS.search(n)) and not n.startswith("potted_") \
+        and not (_BUILT_EXCEPTIONS.search(n) and n not in ("bamboo_block",) and "coral" not in n
+                 and not n.endswith("mushroom_block"))
 
 
 def _is_tree_part(n):
@@ -74,7 +82,7 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
 
     shared = {}
     air_block = {"Name": "minecraft:air", "Properties": {}}
-    AIR, GROUND, TREE, LEAVES, WATER, OTHER_NATURAL, BUILT = range(7)
+    AIR, GROUND, TREE, LEAVES, WATER, OTHER_NATURAL, BUILT, AMBIGUOUS = range(8)
 
     def describe(block):
         """(kind, plain dict, persistent leaves?) of a palette entry."""
@@ -96,6 +104,8 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
             kind = TREE
         elif n == "water":
             kind = WATER
+        elif n in _STANDS_ON_GROUND:
+            kind = AMBIGUOUS
         elif is_natural_terrain(n):
             kind = GROUND if not _NATURAL_PATTERNS.search(n) and n not in ("snow", "lava") else OTHER_NATURAL
         else:
@@ -108,18 +118,27 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
         _, kind, _, persistent = col[i]
         if kind == BUILT:
             return True
+        if kind == AMBIGUOUS:
+            # sandstone standing on natural ground is a wall; under the sand it is the desert itself
+            for j in range(i + 1, len(col)):
+                k2 = col[j][1]
+                if k2 == AMBIGUOUS:
+                    continue
+                return k2 == GROUND or k2 == BUILT
+            return False
         if kind == LEAVES:
             return persistent or include_trees
         if kind == TREE:
             if include_trees:
                 return True
-            # a trunk goes up into natural leaves; a post of a house goes into a roof
+            # a trunk goes up into natural leaves; a post of a house goes into a roof;
+            # a log with nothing built above it (fallen logs, bare branches) is part of the landscape
             for j in range(i - 1, -1, -1):
                 k2 = col[j][1]
-                if k2 == TREE:
+                if k2 in (TREE, AIR):
                     continue
-                return not (k2 == LEAVES and not col[j][3])
-            return True
+                return k2 == BUILT or (k2 == LEAVES and col[j][3])
+            return False
         return False
 
     out = []            # (x, absolute y, z, block)
@@ -128,6 +147,7 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
     data_version = None
     top_max = None
     lowest = None
+    block_data, entities, entity_regions = {}, [], {}
     chunks = [(cx, cz) for cx in range(x1 >> 4, (x2 >> 4) + 1) for cz in range(z1 >> 4, (z2 >> 4) + 1)]
     for n, (cx, cz) in enumerate(chunks):
         if cancelled and cancelled():
@@ -138,6 +158,14 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
         if ed is None:
             missing += len(xs) * len(zs)
         else:
+            # chest contents, sign texts, banner patterns...: kept with the blocks
+            for be in ed.nbt.get("block_entities") or []:
+                bx, by, bz = int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))
+                if x1 <= bx <= x2 and z1 <= bz <= z2:
+                    data = TAG_Compound({k: v for k, v in be.items() if k not in ("id", "x", "y", "z", "keepPacked")})
+                    if data:
+                        block_data[(bx - x1, by, bz - z1)] = data
+            entities.extend(_area_entities(world, cx, cz, x1, z1, x2, z2, entity_regions))
             if data_version is None:
                 data_version = int(ed.nbt.get("DataVersion", 0)) or None
             sections = {}                       # sy -> (indices, metas) or None
@@ -224,9 +252,49 @@ def extract_area(world, x1, z1, x2, z2, mode="costruzioni", include_trees=False,
     ground_offset = max(0, median_ground + 1 - y_lo)
     struct = Structure(w, y_hi - y_lo + 1, l, blocks, data_version)
     struct.ground_offset = ground_offset
+    struct.block_nbt = {(rx, y - y_lo, rz): d for (rx, y, rz), d in block_data.items()
+                        if (rx, y - y_lo, rz) in blocks}
+    for ex, ey, ez, nbt in entities:
+        if y_lo <= ey <= y_hi + 1:
+            rot = nbt.get("Rotation")
+            struct.entities.append({"pos": (ex, ey - y_lo, ez), "nbt": nbt,
+                                    "yaw": float(rot[0]) if rot else 0.0})
     info = {"blocks": count, "missing_columns": missing, "y_range": (y_lo, y_hi),
             "ground_offset": ground_offset, "mode": mode}
     return struct, info
+
+
+def _area_entities(world, cx, cz, x1, z1, x2, z2, cache):
+    """Entities (item frames, armor stands, animals...) of one chunk inside the area, relative positions."""
+    import math
+    from mca_codec import MCARegion
+    folder = world.entities_dir() if hasattr(world, "entities_dir") else None
+    if not folder:
+        return []
+    key = (cx >> 5, cz >> 5)
+    if key not in cache:
+        path = os.path.join(folder, f"r.{key[0]}.{key[1]}.mca")
+        try:
+            cache[key] = MCARegion(path) if os.path.exists(path) else None
+        except Exception:
+            cache[key] = None
+    region = cache[key]
+    if region is None:
+        return []
+    entry = region.chunks.get((cx & 31, cz & 31))
+    if entry is None:
+        return []
+    out = []
+    for ent in entry[0].get("Entities") or []:
+        pos = ent.get("Pos")
+        if not pos or len(pos) < 3 or str(ent.get("id", "")) == "minecraft:player":
+            continue
+        ex, ey, ez = (float(v) for v in pos[:3])
+        if not (x1 <= math.floor(ex) <= x2 and z1 <= math.floor(ez) <= z2):
+            continue
+        nbt = TAG_Compound({k: v for k, v in ent.items() if k not in ("UUID", "Pos", "Motion", "Leash")})
+        out.append((ex - x1, ey, ez - z1, nbt))
+    return out
 
 
 def save_structure(struct, path, extra=None):
@@ -256,8 +324,18 @@ def save_structure(struct, path, extra=None):
     head["DataVersion"] = TAG_Int(struct.data_version or 3955)
     head["size"] = TAG_List(3, [TAG_Int(struct.width), TAG_Int(struct.height), TAG_Int(struct.length)])
     head["palette"] = TAG_List(10, palette)
-    head["entities"] = TAG_List(10, [])
+    ents = []
+    for ent in getattr(struct, "entities", []) or []:
+        ex, ey, ez = ent["pos"]
+        ents.append(TAG_Compound({
+            "pos": TAG_List(6, [TAG_Double(ex), TAG_Double(ey), TAG_Double(ez)]),
+            "blockPos": TAG_List(3, [TAG_Int(int(ex // 1)), TAG_Int(int(ey // 1)), TAG_Int(int(ez // 1))]),
+            "nbt": ent["nbt"]}))
+    head["entities"] = TAG_List(10, ents)
     meta = TAG_Compound({"groundOffset": TAG_Int(getattr(struct, "ground_offset", 0))})
+    technical = getattr(struct, "technical", None)
+    if technical:
+        meta["technical"] = TAG_List(11, [TAG_Int_Array(list(b)) for b in technical])
     for k, v in (extra or {}).items():
         meta[k] = TAG_String(str(v))
     head["MinecraftBuilder"] = meta
@@ -270,11 +348,14 @@ def save_structure(struct, path, extra=None):
     pack3 = st.Struct(">iii").pack
     pack1 = st.Struct(">i").pack
     blocks = struct.blocks
+    block_nbt = getattr(struct, "block_nbt", None) or {}
     for p in positions:
         out += pos_head
         out += pack3(*p)
         out += state_head
         out += pack1(by_obj[id(blocks[p])])
+        if p in block_nbt:
+            out += nbt_to_bytes(block_nbt[p], "nbt")    # chest contents, sign texts...
         out += b"\x00"
     out += b"\x00"
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)

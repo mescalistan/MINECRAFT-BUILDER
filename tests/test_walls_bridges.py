@@ -187,7 +187,7 @@ class ProfileBridgeTests(unittest.TestCase):
         plan = sg.plan_bridge("wood", (15, 0), (45, 0), Banks(), integrate=False)
         info = plan["bridge"]
         self.assertEqual(info["deck_a"], 70)
-        self.assertEqual(info["deck_b"], 65)               # ramp down to the lower bank
+        self.assertEqual(info["deck_b"], 64)               # the ramp reaches the lower bank: no last step
         s = plan["structure"]
         stairs = [b for b in s.blocks.values() if b["Name"] == "minecraft:spruce_stairs"]
         self.assertGreaterEqual(len(stairs), 3 * 5)

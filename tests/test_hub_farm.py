@@ -150,7 +150,7 @@ class IronFarmSpawnTests(unittest.TestCase):
             here, below = self.name(x, y, z), self.name(x, y - 1, z)
             if below is not None and _excluded(below):
                 continue
-            if (here is None or here in ("water", "lava", "bubble_column")) and _is_solid(below):
+            if (here is None or here in ("air", "cave_air", "water", "lava", "bubble_column")) and _is_solid(below):
                 return (x, y, z)
         return None
 
@@ -174,6 +174,12 @@ class IronFarmSpawnTests(unittest.TestCase):
                     self.assertTrue(on_platform, f"un golem puo' nascere in {spot} ({self.name(x, y - 1, z)})")
                     good += 1
             self.assertGreaterEqual(good, 30)
+
+    def test_daylight_detector_sees_the_sky(self):
+        x, y, z = self.c["daylight"]
+        column = [self.name(x, yy, z) for yy in range(y + 1, self.b.h)]
+        self.assertTrue(all(n in (None, "air", "glass") for n in column), column)
+        self.assertTrue(column and column[-1] in (None, "air", "glass"))
 
     def sight_clear(self, a, bpos):
         steps = 200

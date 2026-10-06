@@ -3,6 +3,7 @@ World-level block editing across multiple region files, plus the structure
 injection routine used by the GUI worker thread.
 """
 import json
+import math
 import os
 import time
 import uuid
@@ -27,6 +28,18 @@ _NON_GROUND_HINTS = (
 
 MAX_FOUNDATION_GAP = 10   # blocks of empty space filled under a structure
 MAX_PILLAR_DEPTH = 96     # bridge piers / towers reach the ground up to this depth
+
+
+_NOT_PILLAR = ("stairs", "slab", "banner", "lever", "fence", "_wall", "torch", "lantern", "door", "button",
+               "sign", "carpet", "pane", "bars", "chain", "rail", "pressure_plate", "ladder", "vine", "flower",
+               "sapling", "head", "skull", "candle", "redstone", "repeater", "comparator", "hopper", "_bed",
+               "chest", "barrel", "water", "lava", "glass", "leaves", "air", "piston", "observer", "sensor",
+               "detector", "bulb", "lamp")
+
+
+def _is_pillar_block(name):
+    """Full building blocks that can continue down to the ground as a pillar."""
+    return not any(k in name for k in _NOT_PILLAR)
 
 
 def is_ground(name):
@@ -102,7 +115,11 @@ def adapt_block_data(data, version):
         return data
 
     def to_json(v):
-        return v if v[:1] in ('"', "{", "[") else TAG_String(json.dumps(str(v)))
+        try:
+            json.loads(v)               # already a JSON text component
+            return v
+        except ValueError:
+            return TAG_String(json.dumps(str(v)))
 
     out = TAG_Compound(data)
     if isinstance(out.get("CustomName"), str):
@@ -209,7 +226,7 @@ class World:
         It gets a new UUID and is written to the entities/ region folder on save.
         Returns False if the chunk is not generated.
         """
-        cx, cz = int(x) >> 4, int(z) >> 4
+        cx, cz = math.floor(x) >> 4, math.floor(z) >> 4
         if self.editor(cx, cz) is None:
             return False
         ent = TAG_Compound(nbt)
@@ -277,6 +294,8 @@ class World:
             if log:
                 log(f"Scrittura {os.path.basename(region.file_path)} ({len(region.dirty)} chunk modificati)...")
             region.save()
+        # the regions were reloaded from disk: editors holding the old chunk objects must not be reused
+        self._editors = {}
         if self._entities:
             backups += self._save_entities(backup, log)
         return backups
@@ -375,6 +394,13 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
 
     stats["path"] = 0
     stats["demolished"] = 0
+    batch_columns = set()
+    if blend:
+        for it in placements:
+            st = it.get("structure")
+            if st is not None:
+                bx0, bz0 = it["world_x"], it["world_z"]
+                batch_columns.update((bx0 + bx, bz0 + bz) for (bx, _, bz) in st.blocks)
     for item in placements:
         if item.get("kind") == "path":
             stats["path"] += paint_path(world, item.get("cells", ()), item.get("block", "minecraft:dirt_path"))
@@ -424,6 +450,8 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                 if pillars:
                     # Bridges and towers: the pillar itself continues down to the ground
                     bottom = struct.blocks[(bx, by, bz)]
+                    if not _is_pillar_block(bottom.get("Name", "")):
+                        continue        # stairs, banners, levers... hanging under an overhang
                     fill = (bottom, bottom)
                 else:
                     surface = world.get_block_name(gx, ground, gz) or "minecraft:grass_block"
@@ -450,7 +478,7 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                 continue
             editor = world.editor(gx >> 4, gz >> 4)
             version = editor.data_version if editor is not None else 0
-            bk = (block_key(block), version)
+            bk = (id(block), version)       # blocks of a structure share one dict per palette entry
             cached = state_cache.get(bk)
             if cached is None:
                 state = to_state(upgrade_block(block, version))
@@ -484,7 +512,8 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
                     stats["foundation"] += 1
 
         if blend and item.get("blend", True) and not item.get("extend_columns")                 and struct.width >= 3 and struct.length >= 3 and columns_bottom:
-            stats["blend"] += blend_terrain(world, ox, oz, struct.width, struct.length, oy + base_layer - 1)
+            stats["blend"] += blend_terrain(world, ox, oz, struct.width, struct.length, oy + base_layer - 1,
+                                            skip=batch_columns)
 
     return stats
 
@@ -492,7 +521,7 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
 BLEND_MARGIN = 3
 
 
-def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGIN):
+def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGIN, skip=()):
     """
     Gentle earth slope around a building: natural ground lower than the building's
     ground level is raised gradually over 'margin' blocks. Only adds blocks on natural
@@ -503,7 +532,7 @@ def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGI
     added = 0
     for x in range(ox - margin, ox + width + margin):
         for z in range(oz - margin, oz + length + margin):
-            if ox <= x < ox + width and oz <= z < oz + length:
+            if ox <= x < ox + width and oz <= z < oz + length or (x, z) in skip:
                 continue
             d = max(ox - x, x - (ox + width - 1), oz - z, z - (oz + length - 1))
             top = world.surface_y(x, z)
@@ -576,8 +605,9 @@ def footprint(placements, terrain):
         g = terrain.height(x, z)
         if g is None:
             g = lo - 1
+        start = min(lo, g + 1)          # foundations and piers fill from the old ground up
         blocks = []
-        for y in range(lo, g + 1):
+        for y in range(start, hi + 1):
             name = original(x, y, z) if original else None
             if name is None and world is not None:
                 name = world.get_block_name(x, y, z)
@@ -589,22 +619,31 @@ def footprint(placements, terrain):
             if name is None and world is not None:
                 name = world.get_block_name(x, g, z)
             surf = idx(name or "minecraft:grass_block")
-        out.append([x, z, int(g), int(lo), int(hi), surf] + blocks)
-    return {"columns": out, "surfaces": names}
+        out.append([x, z, int(g), int(lo), int(hi), surf, int(start)] + blocks)
+    return {"columns": out, "surfaces": names, "v": 2}
 
 
 def footprint_to_text(fp):
     """Compact form for the world registry (a long wall has thousands of columns)."""
     if not fp:
         return None
-    return {"surfaces": fp["surfaces"], "cols": ";".join(",".join(str(v) for v in c) for c in fp["columns"])}
+    return {"surfaces": fp["surfaces"], "v": fp.get("v", 1),
+            "cols": ";".join(",".join(str(v) for v in c) for c in fp["columns"])}
 
 
 def footprint_from_text(data):
     if not data:
         return {"columns": [], "surfaces": []}
     cols = [[int(v) for v in c.split(",")] for c in data.get("cols", "").split(";") if c]
-    return {"columns": cols, "surfaces": list(data.get("surfaces", []))}
+    return {"columns": cols, "surfaces": list(data.get("surfaces", [])), "v": data.get("v", 1)}
+
+
+def _column_original(col, version):
+    """(first y, [palette index per y]) of the original blocks recorded for a footprint column."""
+    x, z, g, lo, hi, surf = col[:6]
+    if version >= 2:
+        return col[6], col[7:]
+    return lo, col[6:]
 
 
 class RecordedTerrain:
@@ -623,9 +662,10 @@ class RecordedTerrain:
             for col in rec.get("columns", ()):
                 x, z, g, lo, hi, surf = col[:6]
                 self.cols[(x, z)] = (g, surf)
-                for i, b in enumerate(col[6:]):
+                start, original = _column_original(col, rec.get("v", 1))
+                for i, b in enumerate(original):
                     if 0 <= b < len(names):
-                        self.blocks[(x, lo + i, z)] = names[b]
+                        self.blocks[(x, start + i, z)] = names[b]
 
     def original_name(self, x, y, z):
         """Block that was there before the old build (None: not recorded, read the world)."""
@@ -664,25 +704,31 @@ def demolish(world, footprint_data):
             states[name] = to_state({"Name": name, "Properties": props})
         return states[name]
 
+    version = footprint_data.get("v", 1)
     for col in footprint_data.get("columns", ()):
         x, z, g, lo, hi, surf = col[:6]
-        original = col[6:]
-        for y in range(g + 1, hi + 1):
+        start, original = _column_original(col, version)
+        top_recorded = start + len(original) - 1
+        for y in range(max(g + 1, top_recorded + 1), hi + 1):     # (old records: above ground = air)
             name = world.get_block_name(x, y, z)
             if name is not None and name not in AIR_NAMES and world.set_block(x, y, z, AIR_STATE):
                 changed += 1
         for i, b in enumerate(original):
-            y = lo + i
+            y = start + i
             target = names[b] if 0 <= b < len(names) else None
             name = world.get_block_name(x, y, z)
             if target is None or name is None or name == target:
+                continue
+            if target in AIR_NAMES:
+                if world.set_block(x, y, z, AIR_STATE):
+                    changed += 1
                 continue
             if world.set_block(x, y, z, state(target)):
                 changed += 1
         if surf == -1:
             # piles and piers that went down to the bottom of the water
             water = state("minecraft:water")
-            for y in range(min(lo, g) - 1, min(lo, g) - MAX_PILLAR_DEPTH, -1):
+            for y in range(min(start - 1, g), min(lo, g) - MAX_PILLAR_DEPTH, -1):
                 name = world.get_block_name(x, y, z)
                 if name is None or name in AIR_NAMES or name.endswith("water") or is_natural_terrain(name):
                     break

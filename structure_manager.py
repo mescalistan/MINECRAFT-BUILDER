@@ -89,6 +89,16 @@ class Structure:
                 rx, rz = l - 1 - rz, rx
                 l = self.width if i % 2 == 0 else self.length
             rotated.block_nbt[(rx, y, rz)] = data
+        for x1, y1, z1, x2, y2, z2 in getattr(self, "technical", []):
+            corners = []
+            for cx, cz in ((x1, z1), (x2, z2)):
+                rx, rz, l = cx, cz, self.length
+                for i in range(steps):
+                    rx, rz = l - 1 - rz, rx
+                    l = self.width if i % 2 == 0 else self.length
+                corners.append((rx, rz))
+            (ax, az), (bx, bz) = corners
+            rotated.technical.append((min(ax, bx), y1, min(az, bz), max(ax, bx), y2, max(az, bz)))
         for ent in self.entities:
             ex, ey, ez = ent["pos"]
             l = self.length
@@ -165,7 +175,14 @@ class Structure:
         tag, _ = load_nbt(file_path)
         if not tag:
             raise ValueError("Empty or invalid Schematic NBT file")
-            
+        if "Schematic" in tag and isinstance(tag["Schematic"], dict):
+            tag = tag["Schematic"]                 # Sponge v3 (WorldEdit 7.3+): everything is wrapped
+        if isinstance(tag.get("Blocks"), dict):
+            v3 = tag["Blocks"]                     # v3: Blocks {Palette, Data, BlockEntities}
+            tag = dict(tag)
+            tag["Palette"] = v3.get("Palette", {})
+            tag["BlockData"] = v3.get("Data", b"")
+
         # Sponge schematic has Width, Height, Length as Short tags
         w = int(tag.get("Width", 0))
         h = int(tag.get("Height", 0))

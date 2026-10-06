@@ -618,6 +618,100 @@ def straighten_at_gates(points, closed, gates):
     return pts, out_gates
 
 
+def _gates_off_corners(points, closed, gates, margin=GATE_HALF + 3):
+    """
+    A gatehouse astride a corner leaves holes in the wall: gates closer than 'margin' to a vertex
+    are moved along the longer side; if no side is long enough the gate is dropped.
+    Returns (gates, messages).
+    """
+    path = Path(points, closed)
+    if len(path.points) < 2:
+        return list(gates), []
+    vertices = list(range(len(path.points))) if closed else list(range(1, len(path.points) - 1))
+    out, msgs = [], []
+    for gx, gz in gates:
+        dist, s, _ = path.project(gx, gz)
+        near = [i for i in vertices if path.ds(s, path.cum[i] if i < len(path.cum) else 0.0) < margin]
+        if not near:
+            out.append((gx, gz))
+            continue
+        i = near[0]
+        sv = path.cum[i] if i < len(path.cum) else 0.0
+        before = path.cum[i] - path.cum[i - 1] if i > 0 else (path.length - path.cum[-1] if closed else 0)
+        after = (path.cum[i + 1] if i + 1 < len(path.cum) else path.length) - sv
+        best = None
+        for side_len, sign in ((after, 1), (before, -1)):
+            if side_len >= 2 * margin + 1 and (best is None or side_len > best[0]):
+                best = (side_len, sign)
+        if best is None:
+            msgs.append(f"Porta in X {gx}, Z {gz} tolta: e' su un angolo e i lati vicini sono troppo corti.")
+            continue
+        ns = (sv + best[1] * margin) % path.length if closed else sv + best[1] * margin
+        x, z, _, _ = path.at(ns)
+        out.append((int(round(x)), int(round(z))))
+        msgs.append(f"Porta spostata in X {int(round(x))}, Z {int(round(z))}: un corpo di guardia su un angolo "
+                    f"lascerebbe buchi nelle mura.")
+    return out, msgs
+
+
+def _gate_ramps(g, gate_type, st, terrain, reach=30):
+    """
+    The roads of a gatehouse are level: on sloping ground they would end in a cliff or a tunnel.
+    Beyond their ends a ramp (at most one block per step, with a stair on every step) joins the terrain.
+    Returns a placement or None when the ground is already level.
+    """
+    pw = 2 if gate_type == "portone" else 1
+    ox, oz = DIRS[g["outward"]]
+    ax, az = -oz, ox
+    road = g["road"]
+    cells = {}
+    stairs = []
+    for sign, start in ((1, GATE_OZ), (-1, 12)):
+        prev, flat = road, 0
+        prev_center = None
+        for k in range(reach):
+            d = start + k
+            cx, cz = g["x"] + ox * d * sign, g["z"] + oz * d * sign
+            hs = [terrain.height(cx + ax * w, cz + az * w) for w in range(-pw, pw + 1)]
+            hs = sorted(h for h in hs if h is not None)
+            if not hs:
+                break
+            gr = hs[len(hs) // 2]
+            lvl = max(min(gr, prev + 1), prev - 1)
+            for w in range(-pw - 1, pw + 2):
+                cells[(cx + ax * w, cz + az * w)] = (lvl, abs(w) <= pw)
+            if lvl < prev:          # going down away from the gate: stair on this cell, up towards the gate
+                stairs += [((cx + ax * w, cz + az * w), lvl + 1, (-ox * sign, -oz * sign)) for w in range(-pw, pw + 1)]
+            elif lvl > prev:        # going up: stair on the previous cell, up away from the gate
+                px_, pz_ = prev_center if prev_center else (cx - ox * sign, cz - oz * sign)
+                stairs += [((px_ + ax * w, pz_ + az * w), prev + 1, (ox * sign, oz * sign)) for w in range(-pw, pw + 1)]
+            flat = flat + 1 if lvl == gr else 0
+            prev, prev_center = lvl, (cx, cz)
+            if flat >= 2:
+                break
+    if not cells or all(lvl == road for lvl, _ in cells.values()):
+        return None
+    xs = [x for x, _ in cells] + [p[0][0] for p in stairs]
+    zs = [z for _, z in cells] + [p[0][1] for p in stairs]
+    lows = [lvl for lvl, _ in cells.values()] + [terrain.height(x, z) or road for x, z in cells]
+    y0, y1 = min(lows) - 1, max(lvl for lvl, _ in cells.values()) + 6
+    x0, z0 = min(xs), min(zs)
+    b = Builder(max(xs) - x0 + 1, y1 - y0 + 1, max(zs) - z0 + 1, seed=31)
+    for (x, z), (lvl, is_road) in cells.items():
+        gr = terrain.height(x, z)
+        gr = lvl if gr is None else gr
+        if is_road:
+            for y in range(min(gr, lvl - 1) + 1, lvl):
+                b.set(x - x0, y - y0, z - z0, st["base"])
+            b.set(x - x0, lvl - y0, z - z0, st["road"])
+        for y in range(lvl + 1, max(lvl + 3, gr) + 1):
+            b.set(x - x0, y - y0, z - z0, AIR)
+    for (x, z), y, (dx, dz) in stairs:
+        b.stair(x - x0, y - y0, z - z0, st["stairs"], _cardinal(dx, dz))
+    return {"structure": b.to_structure(), "world_x": x0, "world_z": z0, "y_coord": y0,
+            "name": "Mura - rampa della porta", "group": "mura"}
+
+
 # ---------------------------------------------------------------------------
 # Towers
 # ---------------------------------------------------------------------------
@@ -651,30 +745,32 @@ def _tower(b, put, cx, cz, walk_top, ground, inward, walk_cells, st, lights, pal
             if walk_top - gc >= 3:
                 put(x, walk_top, z, "floor")
             put(x, tt, z, "floor")
-    # doorways where the walkway goes through the tower
+    Y0 = getattr(put, "y0", 0)          # b.door/ladder/lantern take builder Y, put() takes world Y
+    # doorways where the walkway goes through the tower (3 high: the walkway may arrive on a stair)
     for dx, dz in cells:
         if dx * dx + dz * dz > 5.8 and (cx + dx, cz + dz) in walk_cells:
-            put(cx + dx, walk_top + 1, cz + dz, AIR)
-            put(cx + dx, walk_top + 2, cz + dz, AIR)
+            for y in (walk_top + 1, walk_top + 2, walk_top + 3):
+                if y < tt:
+                    put(cx + dx, y, cz + dz, AIR)
     # ground door towards the inside, ladder on the opposite wall
     door = (cx + idx * R, cz + idz * R)
     walk_in = _opp(in_dir)
     if walk_top - gc >= 3:
-        b.door(door[0], gc + 1, door[1], walk_in, wood=st["wood"])
+        b.door(door[0], gc + 1 - Y0, door[1], walk_in, wood=st["wood"])
         put(door[0] + idx, gc + 1, door[1] + idz, AIR)
         put(door[0] + idx, gc + 2, door[1] + idz, AIR)
         put(door[0], gc + 3, door[1], "body")
     lx, lz = cx - idx * (R - 1), cz - idz * (R - 1)
-    b.ladder(lx, gc + 1, tt, lz, in_dir)
+    b.ladder(lx, gc + 1 - Y0, tt - Y0, lz, in_dir)
     # light
     side = (-idz, idx)
-    b.lantern(cx + side[0], gc + 1, cz + side[1])
+    b.lantern(cx + side[0], gc + 1 - Y0, cz + side[1])
     if walk_top - gc >= 3:
-        b.lantern(cx + side[0], walk_top + 1, cz + side[1])
+        b.lantern(cx + side[0], walk_top + 1 - Y0, cz + side[1])
     if lights:
-        night_lamp(b, cx, tt, cz)
+        night_lamp(b, cx, tt - Y0, cz)
     else:
-        b.lantern(cx, tt + 1, cz)
+        b.lantern(cx, tt + 1 - Y0, cz)
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +785,10 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
     """
     st = WALL_STYLES[style]
     palisade = st.get("palisade", False)
+    notes = []
     if gates:
+        gates, moved = _gates_off_corners(points, closed, gates)
+        notes += moved
         points, gates = straighten_at_gates(points, closed, gates)
     path = Path(points, closed)
     if len(path.points) < 2 or path.length < 4:
@@ -725,11 +824,15 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
 
     # gates: snap to the centre line
     gate_info = []
+    # the portcullis and drawbridge circuits reach 11 blocks from the gate centre on each side
+    spacing = 2 * GATE_OX + 2 if gate_type in ("portone", "levatoio") else 2 * GATE_HALF + 4
     for gx, gz in gates:
         dist, s, _ = path.project(gx, gz)
         if dist > 12:
             continue
-        if any(path.ds(s, g["s"]) < 2 * GATE_HALF + 4 for g in gate_info):
+        if any(path.ds(s, g["s"]) < spacing for g in gate_info):
+            notes.append(f"Porta in X {gx}, Z {gz} saltata: troppo vicina a un'altra (servono almeno "
+                         f"{spacing} blocchi).")
             continue
         x, z, ux, uz = path.at(s)
         # (-uz, ux) has cross +1: it points outside when out_sign > 0
@@ -771,8 +874,8 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
             for j in range(1, k + 1):
                 cand.append(path.cum[i] + seg_len * j / (k + 1))
         for s in cand:
-            if any(path.ds(s, g["s"]) < GATE_HALF + TOWER_R + 3 for g in gate_info):
-                continue
+            if any(path.ds(s, g["s"]) < GATE_HALF + GATE_RAISE + TOWER_R + 2 for g in gate_info):
+                continue                 # not on the ramp of the walkway that climbs to the gatehouse
             if any(path.ds(s, t) < 16 for t in tower_s):
                 continue
             tower_s.append(s)
@@ -803,6 +906,7 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
             b.set(x, yy, z, st[what])
         else:
             b.set(x, yy, z, what, **props)
+    put.y0 = y0
 
     def ground_b(bx, bz):
         h = heights.get((bx + x0, bz + z0))
@@ -854,10 +958,10 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
         elif d < -0.5:
             put(bx, t, bz, "body")
             put(bx, t + 1, bz, st["rail"])
-            if i % 8 == 4:
-                b.lantern(bx, tyy(t + 2), bz)
-            elif lights and i % 16 == 12:
+            if lights and i % 16 == 12:
                 night_lamp(b, bx, tyy(t + 1), bz)
+            elif i % 8 == 4:
+                b.lantern(bx, tyy(t + 2), bz)
         else:
             walk_cells.add((bx, bz))
             put(bx, t, bz, "floor")
@@ -901,8 +1005,12 @@ def plan_walls(points, closed, style, height, terrain, towers=True, tower_spacin
         placements.append({"structure": gs, "world_x": g["x"] - cx, "world_z": g["z"] - cz,
                            "y_coord": g["road"] - GATE_H, "name": f"Porta ({GATE_TYPES[gate_type]})",
                            "pillars": True, "group": "mura"})
+        ramp = _gate_ramps(g, gate_type, st, terrain)
+        if ramp is not None:
+            placements.append(ramp)
     report = (f"Mura '{st['title']}': perimetro {path.length:.0f} blocchi, altezza {height}, "
-              f"{len(tower_s)} torri, {len(gate_info)} porte ({GATE_TYPES[gate_type]}).")
+              f"{len(tower_s)} torri, {len(gate_info)} porte ({GATE_TYPES[gate_type]})."
+              + ("".join(" " + n for n in notes)))
     return {"placements": placements, "report": report, "length": path.length, "points": path.points,
             "gates": [(g["x"], g["z"], g["outward"]) for g in gate_info], "towers": len(tower_s)}
 

@@ -40,6 +40,10 @@ def all_templates():
 def build(name):
     entry = all_templates()[name]
     builder = entry["fn"]()
+    # no dark corners where mobs spawn (sealed attics, big halls): a lantern on each dark floor
+    from validate_templates import auto_light
+    for x, y, z in auto_light(builder.to_structure()):
+        builder.lantern(x, y, z)
     builder.save(os.path.join(TEMPLATES_DIR, f"{name}.nbt"))
     return builder
 

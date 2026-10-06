@@ -1,3 +1,4 @@
+import functools
 import os
 import struct
 import zlib
@@ -22,6 +23,7 @@ DATA_VERSION_1_18 = 2860
 # Raw NBT headers (tag type + name) used by MCARegion.quick_surface()
 _WORLD_SURFACE_TAG = b'\x0c\x00\x0dWORLD_SURFACE'
 _YPOS_TAG = b'\x03\x00\x04yPos'
+_STATUS_TAG = b'\x08\x00\x06Status'
 
 
 class UnsupportedChunkFormat(Exception):
@@ -180,6 +182,12 @@ class MCARegion:
             data = zlib.decompress(payload)
         except zlib.error:
             return None
+        st = data.find(_STATUS_TAG)
+        if st >= 0:
+            start = st + len(_STATUS_TAG)
+            ln = struct.unpack_from('>H', data, start)[0]
+            if data[start + 2:start + 2 + ln] not in (b'minecraft:full', b'full'):
+                return []            # still being generated: nothing to show (not None: no fallback)
         hm = data.find(_WORLD_SURFACE_TAG)
         ypos = data.find(_YPOS_TAG)
         if hm < 0 or ypos < 0:
@@ -517,6 +525,7 @@ _BLOCK_ENTITY_IDS = {
 }
 
 
+@functools.lru_cache(maxsize=4096)
 def block_entity_id(name):
     short = name.split(":", 1)[-1]
     be = _BLOCK_ENTITY_IDS.get(short)
@@ -658,6 +667,7 @@ class ChunkEditor:
         recalculate_heightmaps(self.nbt)
         self._dirty_secs.clear()
         self._cache.clear()
+        self.changed = set()        # a later flush must not reset the block entities written now
         return True
 
 

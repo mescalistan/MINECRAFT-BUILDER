@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import shutil
@@ -19,7 +20,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QListWidget, QListWidgetItem,
     QTabWidget, QLineEdit, QSplitter, QSpinBox, QTextEdit, QComboBox,
-    QMessageBox, QCheckBox, QTreeWidget, QTreeWidgetItem, QDialog, QDialogButtonBox, QFormLayout
+    QMessageBox, QCheckBox, QTreeWidget, QTreeWidgetItem, QDialog, QDialogButtonBox, QFormLayout,
+    QScrollArea, QFrame
 )
 from PyQt6.QtGui import QFont, QIcon, QColor
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
@@ -359,6 +361,17 @@ class InjectionWorker(QThread):
 
 
 class MinecraftBuilderApp(QMainWindow):
+    WALL_HELP = ("Suggerisci il perimetro: le mura vengono proposte intorno alle tue costruzioni vicino al "
+                 "giocatore, con la porta dove passa una strada o dove il terreno e' libero e piano. Oppure "
+                 "disegnale: clic sui vertici (linee a 0/45/90 gradi, Shift per linee libere), clic sul primo punto "
+                 "o Invio per chiudere (C chiude allineato), doppio clic per un tratto aperto, Backspace toglie "
+                 "l'ultimo punto, Esc annulla.")
+    ROAD_HELP = ("Clicca i punti del tracciato (linee a 0/45/90 gradi, Shift per linee libere), Invio o doppio "
+                 "clic per finire, Backspace toglie l'ultimo punto. Vicino a una strada esistente il punto si "
+                 "aggancia da solo (cerchio azzurro): le strade fatte col programma e i sentieri o le strade "
+                 "lastricate gia' presenti nel mondo. Le estremita' entro 8 blocchi da una strada vengono "
+                 "collegate a quella.")
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Minecraft Auto-Builder & Map Editor")
@@ -489,6 +502,16 @@ class MinecraftBuilderApp(QMainWindow):
         # Structure Library Tab System
         self.tabs = QTabWidget()
         sidebar_layout.addWidget(self.tabs)
+        tabs_add = self.tabs.addTab
+
+        def add_scrolling_tab(widget, name):
+            """Every tab scrolls: on small screens the buttons keep their size instead of being squashed."""
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setFrameShape(QFrame.Shape.NoFrame)
+            area.setWidget(widget)
+            return tabs_add(area, name)
+        self.tabs.addTab = add_scrolling_tab
         
         # Tab 1: Local structures list
         local_tab = QWidget()
@@ -688,20 +711,17 @@ class MinecraftBuilderApp(QMainWindow):
         self.built_walls_demolish_btn.clicked.connect(lambda: self.demolish_built_line("walls"))
         built_row.addWidget(self.built_walls_demolish_btn)
         wl.addLayout(built_row)
-        self.wall_info = hint("Suggerisci il perimetro: le mura vengono proposte intorno alle tue costruzioni vicino "
-                              "al giocatore, con la porta dove passa una strada o dove il terreno e' libero e "
-                              "piano. Oppure disegnale: clic sui vertici (linee a 0/45/90 gradi, Shift per "
-                              "linee libere), clic sul primo punto o Invio per chiudere, doppio clic per un tratto "
-                              "aperto, Backspace toglie l'ultimo punto, Esc annulla.")
+        self.wall_info = hint(self.WALL_HELP)
         wl.addWidget(self.wall_info)
-        wl.addWidget(hint("Leve: ogni porta (portone o ponte levatoio) ha una leva dentro, sul selciato del "
-                          "cortile a sinistra della strada, e una leva nascosta fuori, in un cespuglio a destra "
-                          "della strada d'arrivo. Ogni scatto di una delle due leve apre o chiude la porta: apri "
-                          "da fuori, entri e richiudi da dentro. Ponte levatoio: davanti alla porta c'e' un "
-                          "fossato; i sensori sculk sotto la strada fanno emergere il ponte quando qualcuno si "
-                          "avvicina, la leva lo tiene alzato. Le lampade del passaggio si accendono al movimento, "
-                          "quelle sulle torri di notte. Sulle mura oblique il tratto vicino alla porta viene "
-                          "raddrizzato, cosi' il corpo di guardia si unisce bene alle mura."))
+        self.wall_gate_type.setToolTip(
+            "Leve: il portone e il ponte levatoio hanno una leva dentro, sul muro del corpo di guardia accanto "
+            "al passaggio, e una leva nascosta fuori, in un cespuglio a destra della strada d'arrivo. Ogni scatto "
+            "di una delle due apre o chiude la porta: apri da fuori, entri e richiudi da dentro.\n"
+            "Ponte levatoio: davanti alla porta c'e' un fossato; i sensori sculk sotto la strada fanno emergere "
+            "il ponte quando qualcuno si avvicina, la leva lo tiene alzato.\n"
+            "Luci: nel passaggio si accendono al movimento, sulle torri di notte. Sulle mura oblique il tratto "
+            "vicino alla porta viene raddrizzato; una porta su un angolo viene spostata sul lato piu' lungo.")
+        wl.addWidget(hint("Passa il mouse sul tipo di porta per sapere come funzionano leve, sensori e luci."))
         self.wall_plan_input = None
         wl.addStretch()
         self.tabs.addTab(wall_tab, "Mura")
@@ -751,11 +771,7 @@ class MinecraftBuilderApp(QMainWindow):
         self.road_stage_btn.setEnabled(False)
         self.road_stage_btn.clicked.connect(self.stage_road)
         rl.addWidget(self.road_stage_btn)
-        self.road_info = hint("Clicca i punti del tracciato (linee a 0/45/90 gradi, Shift per linee libere), "
-                              "Invio o doppio clic per finire, Backspace toglie l'ultimo punto. Vicino a una "
-                              "strada esistente il punto si aggancia da solo (cerchio azzurro): le strade fatte "
-                              "col programma e i sentieri o le strade lastricate gia' presenti nel mondo. Le "
-                              "estremita' entro 8 blocchi da una strada vengono collegate a quella.")
+        self.road_info = hint(self.ROAD_HELP)
         rl.addWidget(self.road_info)
         rl.addWidget(QLabel("Strade gia' costruite:"))
         self.built_roads_combo = QComboBox()
@@ -810,7 +826,10 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer.polygon_finished.connect(self.on_polygon_finished)
         self.map_viewer.preview_edited.connect(self.on_preview_edited)
         self.tabs.currentChanged.connect(self.on_tab_changed)
-        self.map_viewer.mode_cancelled.connect(lambda: self.log("Operazione annullata."))
+        self.map_viewer.mode_cancelled.connect(
+            lambda mode: self.log("Modifica terminata: ora puoi mettere in coda." if mode == "edit_poly"
+                                  else "Operazione annullata."))
+        self.map_viewer.unlocked.connect(self.unlock_placement)
         self.map_viewer.game_structures_changed.connect(self.update_structure_jump_list)
 
         # Map toolbar: overlays and quick navigation
@@ -906,6 +925,11 @@ class MinecraftBuilderApp(QMainWindow):
             "In un mondo senza mod, un blocco sconosciuto fa scartare al gioco l'intera sezione 16x16x16."
         )
         inspector_layout.addWidget(self.skip_modded_checkbox)
+        scope_lbl = QLabel("Queste opzioni valgono per tutto cio' che inietti (anche la coda); l'altezza Y vale "
+                           "per la struttura che stai posizionando.")
+        scope_lbl.setWordWrap(True)
+        scope_lbl.setStyleSheet("color: #888896; font-size: 10px;")
+        inspector_layout.addWidget(scope_lbl)
 
         # Suggest Position Button
         self.suggest_pos_btn = QPushButton("Consiglia Posizione Ottimale")
@@ -915,7 +939,8 @@ class MinecraftBuilderApp(QMainWindow):
         
         # Rotations shortcuts
         rot_layout = QHBoxLayout()
-        rotate_btn = QPushButton("Ruota 90° (R)")
+        self.rotate_btn = rotate_btn = QPushButton("Ruota 90° (R)")
+        rotate_btn.setEnabled(False)
         rotate_btn.clicked.connect(self.rotate_current_structure)
         rot_layout.addWidget(rotate_btn)
         
@@ -931,7 +956,7 @@ class MinecraftBuilderApp(QMainWindow):
         inspector_layout.addWidget(self.lock_feedback_lbl)
         
         # Add to Map Button
-        self.stage_btn = QPushButton("Aggiungi alla Mappa")
+        self.stage_btn = QPushButton("Metti in coda")
         self.stage_btn.setEnabled(False)
         self.stage_btn.clicked.connect(self.stage_placement)
         inspector_layout.addWidget(self.stage_btn)
@@ -943,7 +968,11 @@ class MinecraftBuilderApp(QMainWindow):
         
         # Queue List Widget
         self.staged_list = QListWidget()
-        self.staged_list.setFixedHeight(110)
+        self.staged_list.setMinimumHeight(130)
+        self.staged_list.setWordWrap(True)
+        self.staged_list.setToolTip("Canc toglie gli elementi selezionati dalla coda.")
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self.staged_list, activated=self.remove_selected_staged)
         self.staged_list.itemSelectionChanged.connect(self.staged_list_selection_changed)
         inspector_layout.addWidget(self.staged_list)
         
@@ -956,7 +985,7 @@ class MinecraftBuilderApp(QMainWindow):
         
         self.clear_staged_btn = QPushButton("Svuota")
         self.clear_staged_btn.setEnabled(False)
-        self.clear_staged_btn.clicked.connect(self.clear_all_staged)
+        self.clear_staged_btn.clicked.connect(self.confirm_clear_staged)
         staged_ctrl_layout.addWidget(self.clear_staged_btn)
         inspector_layout.addLayout(staged_ctrl_layout)
         
@@ -993,12 +1022,31 @@ class MinecraftBuilderApp(QMainWindow):
         
         self.console = QTextEdit()
         self.console.setReadOnly(True)
+        self.console.setMinimumHeight(140)
         inspector_layout.addWidget(self.console)
-        
-        main_splitter.addWidget(inspector)
-        
-        # Set splitter sizes proportions
-        main_splitter.setSizes([260, 600, 240])
+
+        inspector_scroll = QScrollArea()
+        inspector_scroll.setWidgetResizable(True)
+        inspector_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inspector_scroll.setWidget(inspector)
+        main_splitter.addWidget(inspector_scroll)
+
+        # The map gets the free space; side panels keep a usable width
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setStretchFactor(2, 0)
+        sidebar.setMinimumWidth(300)
+        inspector_scroll.setMinimumWidth(290)
+        main_splitter.setCollapsible(0, False)
+        main_splitter.setCollapsible(2, False)
+        self.main_splitter = main_splitter
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._initial_splitter_sizes)
+
+    def _initial_splitter_sizes(self):
+        w = max(self.width(), 1100)
+        side, insp = max(320, int(w * 0.26)), max(290, int(w * 0.22))
+        self.main_splitter.setSizes([side, max(300, w - side - insp), insp])
 
     def log(self, msg):
         styled_msg = msg
@@ -1066,8 +1114,35 @@ class MinecraftBuilderApp(QMainWindow):
         self.world_select.blockSignals(False)
         self.world_changed()
 
+    def _confirm_discard_queue(self):
+        """Switching world or dimension discards the queue and the plans (they belong to this world)."""
+        if getattr(self, "injection_thread", None) is not None:
+            QMessageBox.information(self, "Iniezione in corso", "Aspetta la fine dell'iniezione prima di cambiare "
+                                    "mondo o dimensione.")
+            return False
+        pending = len(self.staged_placements)
+        if pending and QMessageBox.question(
+                self, "Coda da svuotare",
+                f"In coda ci sono {pending} elementi preparati per questo mondo: cambiando mondo o dimensione "
+                f"verranno scartati. Continuare?") != QMessageBox.StandardButton.Yes:
+            return False
+        if pending:
+            self.clear_all_staged()
+        self.wall_plan_input = None
+        self.road_plan_input = None
+        self.locked_placement = None
+        if hasattr(self, "map_viewer"):
+            self.map_viewer.wall_preview = None
+        return True
+
     def world_changed(self):
         world_name = self.world_select.currentText()
+        if self.current_world_path and world_name != os.path.basename(self.current_world_path) \
+                and not self._confirm_discard_queue():
+            self.world_select.blockSignals(True)
+            self.world_select.setCurrentText(os.path.basename(self.current_world_path))
+            self.world_select.blockSignals(False)
+            return
         self.dim_select.blockSignals(True)
         self.dim_select.clear()
         self.available_dims = []
@@ -1090,6 +1165,7 @@ class MinecraftBuilderApp(QMainWindow):
                 self.log(f"La dimensione {want} di questo mondo non ha ancora regioni generate: apro {labels[0]}.")
             self.dim_select.setCurrentIndex(labels.index(want) if want in labels else 0)
         self.pending_dimension = None
+        self._shown_dimension = self.dim_select.currentText()
         self.dim_select.blockSignals(False)
         self.update_player_info_display()
         self.scan_regions()
@@ -1099,6 +1175,13 @@ class MinecraftBuilderApp(QMainWindow):
         QTimer.singleShot(50, self.go_to_player_region)
 
     def dimension_changed(self):
+        shown = getattr(self, "_shown_dimension", None)
+        if shown is not None and shown != self.dim_select.currentText() and not self._confirm_discard_queue():
+            self.dim_select.blockSignals(True)
+            self.dim_select.setCurrentText(shown)
+            self.dim_select.blockSignals(False)
+            return
+        self._shown_dimension = self.dim_select.currentText()
         self.scan_regions()
         self.go_to_player_region()
 
@@ -1159,11 +1242,25 @@ class MinecraftBuilderApp(QMainWindow):
             
         region_path = os.path.join(self.get_region_dir(), region_file)
         self.log(f"Caricamento regione {region_file}...")
+        old = self.current_region
+        locked_world = None
+        if old is not None and self.locked_placement is not None:
+            locked_world = (old.rx * 512 + self.locked_placement[0], old.rz * 512 + self.locked_placement[1])
         
         try:
             self.current_region = MCARegion(region_path)
             self.terrain = None
             self.map_viewer.set_region(self.current_region)
+            if locked_world is not None:
+                # grid coordinates are relative to the region shown: the locked spot must not move
+                gx = locked_world[0] - self.current_region.rx * 512
+                gz = locked_world[1] - self.current_region.rz * 512
+                self.locked_placement = (gx, gz)
+                self.map_viewer.preview_grid_x, self.map_viewer.preview_grid_z = gx, gz
+            if getattr(self, "wall_plan_input", None):
+                self.update_wall_preview()
+            if getattr(self, "road_plan_input", None):
+                self.update_road_preview()
             self.refresh_placed_structures()
             self.update_undo_button()
             self.log(f"Regione {region_file} caricata correttamente! (r.{self.current_region.rx}.{self.current_region.rz})")
@@ -1358,7 +1455,9 @@ class MinecraftBuilderApp(QMainWindow):
         self.local_list.clear()
         os.makedirs(self.templates_dir, exist_ok=True)
         groups = {}
+        self.catalog_titles = {}
         for entry in catalog.load_catalog(self.templates_dir):
+            self.catalog_titles[entry["file"]] = entry["title"]
             cat = entry["category"]
             if cat not in groups:
                 top = QTreeWidgetItem([cat])
@@ -1518,7 +1617,8 @@ class MinecraftBuilderApp(QMainWindow):
         elif ".nbt" in dl_url or dl_url.startswith("local:"):
             ext = ".nbt"
             
-        filename = metadata["title"].replace(" ", "_").lower() + ext
+        safe = re.sub(r"[^a-z0-9_-]+", "_", metadata["title"].lower()).strip("_") or "struttura"
+        filename = safe[:60] + ext
         dest_path = os.path.join(self.templates_dir, filename)
         
         self.log(f"Download in corso: {metadata['title']}...")
@@ -1551,6 +1651,13 @@ class MinecraftBuilderApp(QMainWindow):
                 # The structure's first layer goes on the block above the terrain
                 self.y_spinbox.setValue(height_y + 1 - self._ground_offset())
 
+    def unlock_placement(self):
+        """Right click on the map: the structure follows the mouse again, nothing is fixed."""
+        self.locked_placement = None
+        self.lock_feedback_lbl.setText("Fai clic sulla mappa per posizionare.")
+        self.lock_feedback_lbl.setStyleSheet("color: #e67e22; font-weight: bold; font-size: 11px;")
+        self.check_injection_readiness()
+
     def lock_placement_coordinate(self, grid_x, grid_z):
         self.locked_placement = (grid_x, grid_z)
         # Snap Spinbox to average footprint height or individual coordinate height
@@ -1564,7 +1671,8 @@ class MinecraftBuilderApp(QMainWindow):
             
         world_x = self.current_region.rx * 512 + grid_x
         world_z = self.current_region.rz * 512 + grid_z
-        self.lock_feedback_lbl.setText(f"Iniezione bloccata a X: {world_x}, Z: {world_z}")
+        self.lock_feedback_lbl.setText(f"Posizione fissata a X: {world_x}, Z: {world_z} "
+                                       f"(clic destro per spostarla)")
         self.lock_feedback_lbl.setStyleSheet("color: #2ecc71; font-weight: bold; font-size: 11px;")
         self.check_injection_readiness()
 
@@ -1579,7 +1687,8 @@ class MinecraftBuilderApp(QMainWindow):
         s_name = self.selected_structure_name
         item_x = self.current_region.rx * 512 + grid_x
         item_z = self.current_region.rz * 512 + grid_z
-        display_name = f"{s_name} ({item_x}, {y_val}, {item_z})"
+        title = getattr(self, "catalog_titles", {}).get(s_name, s_name)
+        display_name = f"{title} (X {item_x}, Y {y_val}, Z {item_z})"
         
         # Copy the structure object so it is frozen in its current state
         import copy
@@ -1939,8 +2048,10 @@ class MinecraftBuilderApp(QMainWindow):
         """A single click in 'point' mode: village centre or new gate, depending on what was asked."""
         action, self.point_action = getattr(self, "point_action", "village"), "village"
         if action == "gate":
-            self.map_viewer.set_mode("place")
-            self.add_wall_gate(grid_x, grid_z)
+            if self.add_wall_gate(grid_x, grid_z):
+                self.map_viewer.set_mode("place")
+            else:
+                self.point_action = "gate"       # stay in gate mode until a good click or Esc
         else:
             self.on_village_center(grid_x, grid_z)
 
@@ -2012,21 +2123,28 @@ class MinecraftBuilderApp(QMainWindow):
         path = walls.Path(self.wall_plan_input["points"], self.wall_plan_input["closed"])
         dist, s, _ = path.project(x, z)
         if dist > 12:
-            self.log("Clicca piu' vicino alle mura per mettere la porta.")
-            return
+            self.log("Clicca piu' vicino alle mura per mettere la porta (Esc per rinunciare).")
+            return False
         px, pz, _, _ = path.at(s)
         self.wall_plan_input["gates"].append((int(round(px)), int(round(pz))))
         self.update_wall_preview()
         self.log(f"Porta aggiunta a X {int(round(px))}, Z {int(round(pz))}.")
+        return True
 
     def clear_wall_gates(self):
         if self.wall_plan_input:
+            n = len(self.wall_plan_input["gates"])
             self.wall_plan_input["gates"] = []
             self.update_wall_preview()
+            self.log(f"Tolte {n} porte dal perimetro." if n else "Il perimetro non ha porte.")
 
     def update_wall_preview(self):
         inp = self.wall_plan_input
         self.wall_edit_btn.setEnabled(bool(inp))
+        self.wall_gate_btn.setEnabled(bool(inp))
+        self.wall_gate_clear_btn.setEnabled(bool(inp and inp.get("gates")))
+        if not inp:
+            self.wall_info.setText(self.WALL_HELP)
         if not inp or not self.current_region:
             if getattr(self, "preview_owner", None) in (None, "walls"):
                 self.map_viewer.wall_preview = None
@@ -2112,6 +2230,8 @@ class MinecraftBuilderApp(QMainWindow):
         inp = self.road_plan_input
         self.road_edit_btn.setEnabled(bool(inp))
         self.road_stage_btn.setEnabled(bool(inp))
+        if not inp:
+            self.road_info.setText(self.ROAD_HELP)
         if not inp or not self.current_region:
             if getattr(self, "preview_owner", None) == "roads":
                 self.map_viewer.wall_preview = None
@@ -2176,8 +2296,21 @@ class MinecraftBuilderApp(QMainWindow):
             return base
         return RecordedTerrain(base, [footprint_from_text(old_record.get("footprint"))])
 
+    def _queued_on(self, rec_id):
+        """True if the queue already holds a modification or a demolition of this built wall/road."""
+        for entry in self.staged_placements:
+            for it in (entry["items"] if entry.get("kind") == "group" else [entry]):
+                lr = it.get("line_record")
+                if lr and lr[2] == rec_id:
+                    return True
+        return False
+
     def _stage_line(self, kind, label, placements, record, old, report):
         """Queues a wall/road: the demolition of the version it replaces first, then the new one."""
+        if old is not None and self._queued_on(old["id"]):
+            QMessageBox.warning(self, "Gia' in coda", "In coda c'e' gia' una modifica o una demolizione di "
+                                "quest'opera: inietta o togli quella dalla coda prima di prepararne un'altra.")
+            return
         items = []
         if old is not None:
             items.append({"kind": "demolish", "name": f"{label} precedente",
@@ -2230,6 +2363,10 @@ class MinecraftBuilderApp(QMainWindow):
     def demolish_built_line(self, kind):
         rec = self._selected_built(kind)
         if rec is None:
+            return
+        if self._queued_on(rec["id"]):
+            QMessageBox.warning(self, "Gia' in coda", "In coda c'e' gia' una modifica o una demolizione di "
+                                "quest'opera: inietta o togli quella dalla coda prima.")
             return
         what = "le mura" if kind == "walls" else "la strada"
         if QMessageBox.question(self, "Demolisci", f"Demolire {what} '{rec['title']}' del {rec['date']}? Il "
@@ -2306,7 +2443,11 @@ class MinecraftBuilderApp(QMainWindow):
                 lines.append({"kind": kind, "points": [tuple(p) for p in r["points"]],
                               "closed": r.get("closed", False), "title": r["title"]})
             if not recs:
-                combo.addItem("Nessuna" if kind == "roads" else "Nessuna", None)
+                combo.addItem("Nessuna", None)
+        for kind, btns in (("walls", (self.built_walls_edit_btn, self.built_walls_demolish_btn)),
+                           ("roads", (self.built_roads_edit_btn, self.built_roads_demolish_btn))):
+            for b in btns:
+                b.setEnabled(bool(self.built_lines(kind)))
         self.map_viewer.built_lines = lines
         self.map_viewer.update()
 
@@ -2390,8 +2531,9 @@ class MinecraftBuilderApp(QMainWindow):
 
     def stage_village(self, result, style):
         self.log(result["report"])
-        if not result["placements"]:
-            QMessageBox.warning(self, "Villaggio", result["report"])
+        if len(result["placements"]) <= 1:      # only the square: no building fits here
+            QMessageBox.warning(self, "Villaggio", result["report"] + "\n\nNessun edificio ci sta: scegli una "
+                                "zona piu' pianeggiante o asciutta.")
             return
         items = list(result["placements"])
         if result["path_cells"]:
@@ -2402,7 +2544,7 @@ class MinecraftBuilderApp(QMainWindow):
             items.append({"structure": lamp, "world_x": x, "world_z": z, "y_coord": y, "name": "lampione"})
         title = vgen.STYLES[style]["title"]
         self.add_staged({"kind": "group", "items": items, "name": title},
-                        f"{title}: {len(result['placements'])} edifici, strade e lampioni")
+                        f"{title}: {len(result['placements'])} costruzioni (piazza compresa), strade e lampioni")
 
     # ---- Cut an area ----
     def start_cut_mode(self):
@@ -2482,6 +2624,23 @@ class MinecraftBuilderApp(QMainWindow):
         self.map_viewer.update()
         self.check_injection_readiness()
 
+    def _remove_injected_from_queue(self):
+        """Removes from the queue only what was injected (items added meanwhile stay)."""
+        done = {id(e) for e in getattr(self, "injecting_entries", [])}
+        for row in range(len(self.staged_placements) - 1, -1, -1):
+            if id(self.staged_placements[row]) in done:
+                self.staged_placements.pop(row)
+                self.staged_list.takeItem(row)
+        self.injecting_entries = []
+        self.map_viewer.staged_placements = self.staged_placements
+        self.map_viewer.update()
+
+    def confirm_clear_staged(self):
+        n = len(self.staged_placements)
+        if n and QMessageBox.question(self, "Svuota la coda", f"Togliere dalla coda tutti i {n} elementi?") \
+                == QMessageBox.StandardButton.Yes:
+            self.clear_all_staged()
+
     def clear_all_staged(self):
         self.staged_placements.clear()
         self.staged_list.clear()
@@ -2495,6 +2654,13 @@ class MinecraftBuilderApp(QMainWindow):
         self.remove_staged_btn.setEnabled(has_selection)
 
     def check_injection_readiness(self):
+        if getattr(self, "injection_thread", None) is not None:
+            for w in (self.apply_btn, self.clear_staged_btn, self.remove_staged_btn):
+                w.setEnabled(False)
+            self.stage_btn.setEnabled(bool(self.current_region and self.selected_structure
+                                           and self.locked_placement is not None))
+            self.apply_btn.setText("Iniezione in corso...")
+            return
         # Stage button is active if there is an active locked structure
         if self.current_region and self.selected_structure and self.locked_placement is not None:
             self.stage_btn.setEnabled(True)
@@ -2516,6 +2682,8 @@ class MinecraftBuilderApp(QMainWindow):
             
         if hasattr(self, 'suggest_pos_btn'):
             self.suggest_pos_btn.setEnabled(self.current_region is not None and self.selected_structure is not None)
+        if hasattr(self, "rotate_btn"):
+            self.rotate_btn.setEnabled(self.selected_structure is not None)
 
     def integrated_height(self, grid_x, grid_z):
         """
@@ -2549,8 +2717,9 @@ class MinecraftBuilderApp(QMainWindow):
 
         total_height = 0
         count = 0
-        for bz in range(sl):
-            for bx in range(sw):
+        step = max(1, int((sw * sl / 400) ** 0.5))     # big cuts: sample, the UI must stay responsive
+        for bz in range(0, sl, step):
+            for bx in range(0, sw, step):
                 h = self.map_viewer.height_at(grid_x + bx, grid_z + bz)
                 if h is not None:
                     total_height += h
@@ -2627,7 +2796,8 @@ class MinecraftBuilderApp(QMainWindow):
         self.y_spinbox.setValue(avg_h)
         
         self.map_viewer.update()
-        self.lock_feedback_lbl.setText(f"Iniezione bloccata a X: {self.current_region.rx * 512 + best_gx}, Z: {self.current_region.rz * 512 + best_gz}")
+        self.lock_feedback_lbl.setText(f"Posizione fissata a X: {self.current_region.rx * 512 + best_gx}, "
+                                       f"Z: {self.current_region.rz * 512 + best_gz}")
         self.lock_feedback_lbl.setStyleSheet("color: #2ecc71; font-weight: bold; font-size: 11px;")
         self.check_injection_readiness()
         
@@ -2675,7 +2845,7 @@ class MinecraftBuilderApp(QMainWindow):
         return False
 
     def apply_structure_to_world(self):
-        if not self.current_region:
+        if not self.current_region or getattr(self, "injection_thread", None) is not None:
             return
             
         # Check if the specific world is open (locked) or if Minecraft/Java is active
@@ -2728,6 +2898,8 @@ class MinecraftBuilderApp(QMainWindow):
         if not placements_to_inject:
             self.log("Nessuna struttura posizionata o in coda da iniettare.")
             return
+        self.injecting_entries = list(self.staged_placements)     # what leaves the queue when done
+        self.injecting_direct = not self.staged_placements
             
         old_format = [p["name"] for p in placements_to_inject
                       if "structure" in p and p["structure"].is_pre_flattening()]
@@ -2772,10 +2944,21 @@ class MinecraftBuilderApp(QMainWindow):
         self.injection_thread.error.connect(self.on_injection_error)
         self.injection_thread.finished.connect(self.on_injection_finished)
         self.injection_thread.start()
+        for w in (self.world_select, self.dim_select, self.region_select):
+            w.setEnabled(False)
+        self.check_injection_readiness()
 
     def on_injection_success(self):
-        self.log("Tutte le strutture sono state iniettate con successo!")
         self.terrain = None
+        stats = getattr(self.injection_thread, "stats", None) or {}
+        wrote = any(stats.get(k, 0) for k in ("placed", "cleared", "foundation", "demolished", "path", "entities"))
+        self._remove_injected_from_queue()
+        if stats and not wrote:
+            self.log("Nessun blocco e' stato scritto: l'area non e' ancora generata. Niente e' stato registrato.")
+            self.map_viewer.pause_loading(False)
+            self.show_injection_summary()
+            return
+        self.log("Tutte le strutture sono state iniettate con successo!")
         before = self._registry_sizes()
         before["token"] = str(time.time_ns())
         self.record_bridges(getattr(self, "last_injected", None) or [])
@@ -2785,10 +2968,9 @@ class MinecraftBuilderApp(QMainWindow):
         self.push_undo(getattr(world, "last_backups", []), before,
                        [i.get("name", "") for i in (getattr(self, "last_injected", None) or []) if "structure" in i])
         
-        # Clear queue after successful write
-        if self.staged_placements:
-            self.clear_all_staged()
-            
+        if getattr(self, "injecting_direct", False):
+            self.unlock_placement()            # a direct injection must not be repeated by mistake
+
         # Refresh map viewer (the modified regions are rendered again)
         self.map_viewer.pause_loading(False)
         self.map_viewer.invalidate()
@@ -2835,6 +3017,12 @@ class MinecraftBuilderApp(QMainWindow):
             "Nota: l'app modifica solo i mondi salvati su questo PC; i server multiplayer non cambiano.")
 
     def on_injection_permission_error(self, err_msg):
+        self.injecting_entries = []           # nothing written: the queue stays as it is
+        QMessageBox.critical(
+            self, "Accesso negato",
+            f"Windows non permette di scrivere il mondo:\n{err_msg}\n\nDi solito Minecraft e' ancora aperto: "
+            "chiudilo del tutto (anche javaw.exe in Gestione attivita') e riprova. Controlla anche che la "
+            "cartella del mondo non sia in sola lettura. La coda non e' stata svuotata.")
         self.log(f"ERRORE DI PERMESSO (Accesso Negato): {err_msg}")
         self.log("Se hai già chiuso il gioco, Windows potrebbe bloccare la scrittura. Risolvi così:")
         self.log("  - Apri Gestione Attività (Ctrl+Shift+Esc), cerca 'javaw.exe' o 'Minecraft' e clicca su 'Termina Attività'.")
@@ -2842,9 +3030,15 @@ class MinecraftBuilderApp(QMainWindow):
         self.log("  - Verifica che la cartella del salvataggio non sia impostata su 'Solo Lettura'.")
 
     def on_injection_error(self, err_msg):
+        self.injecting_entries = []
         self.log(f"Errore grave durante l'iniezione: {err_msg}")
+        QMessageBox.critical(self, "Errore durante l'iniezione",
+                             f"L'iniezione si e' interrotta:\n{err_msg}\n\nIl mondo non e' stato modificato "
+                             "(i file vengono scritti solo alla fine). La coda non e' stata svuotata.")
 
     def on_injection_finished(self):
+        for w in (self.world_select, self.dim_select, self.region_select):
+            w.setEnabled(True)
         self.map_viewer.pause_loading(False)
         QApplication.restoreOverrideCursor()
         QApplication.processEvents()
@@ -2852,6 +3046,7 @@ class MinecraftBuilderApp(QMainWindow):
         self.update_player_info_display()
         # Clean up thread
         self.injection_thread = None
+        self.check_injection_readiness()
         self.update_undo_button()
 
     def closeEvent(self, event):

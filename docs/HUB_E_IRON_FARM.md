@@ -50,7 +50,7 @@ Nel catalogo ci sono due nuove categorie, **Hub e magazzini** e **Farm automatic
   - torre con scala a chiocciola e ascensore a bolle;
   - chiosco in superficie, 11 × 11.
 - **Resa dello smistatore**: limitata dalle tramogge, 2,5 oggetti al secondo (una tramoggia sposta un oggetto ogni 8 tick). Il deposito accetta quindi circa 9000 oggetti all'ora, che percorrono la catena a 2,5 blocchi al secondo.
-- **Capacità**: 9 categorie da 27 slot (1728 oggetti ciascuna) più il baule di troppo pieno.
+- **Capacità**: 9 categorie da 27 slot (1728 oggetti ciascuna) più il barile di troppo pieno.
 - **Mob cap**: nessun impatto. Tutti gli spazi aperti sono illuminati: il validatore non trova punti bui. Ogni cella vuota sotto il suolo confina solo con blocchi messi dal modello, così grotte o falde vicine non possono allagare l'hub.
 - **Distanza dal giocatore**: il magazzino funziona solo nei chunk caricati, cioè quando il giocatore è entro la simulation distance.
 
@@ -66,16 +66,16 @@ Nel catalogo ci sono due nuove categorie, **Hub e magazzini** e **Farm automatic
   - 154 pietrisco d'ardesia (cobbled deepslate);
   - 120 scale di piastrelle e 59 di ardesia levigata;
   - 20 librerie.
-- **Redstone e meccanica**: 52 tramogge, 9 comparatori, 27 polveri di redstone, 9 torce di redstone a muro, 10 barili, 2 bauli, 1 sabbia delle anime e la colonna di bolle.
+- **Redstone e meccanica**: 52 tramogge, 9 comparatori, 27 polveri di redstone, 9 torce di redstone a muro, 11 barili, 1 baule, 1 sabbia delle anime e la colonna di bolle.
 - **Entità**: nessuna.
 - **Contenuti scritti dall'app**:
   - in ogni tramoggia filtro, **41 oggetti bersaglio** e **4 bastoni rinominati "Filtro"**;
   - in totale: 41 lingotti di ferro, d'oro e di rame, 41 di redstone, carbone, lapislazzuli, pietrisco, pietrisco d'ardesia e papaveri, più 36 bastoni "Filtro";
-  - nomi sui barili (*Ferro*, *Oro*...), sul baule *Deposito* e sul baule *Troppo pieno*.
+  - nomi sui barili (*Ferro*, *Oro*...), sul baule *Deposito* e sul barile *Troppo pieno* (un barile si apre anche con il muro sopra, un baule no).
 
 ### Circuito: smistatore anti-overflow (schema tipo ImpulseSV)
 
-La catena **H** è fatta di tramogge al livello y=3, nella fila z=9, con il beccuccio a est. Parte dal baule *Deposito* (x=4), che H svuota da sotto, e dal canale d'acqua del podio, che porta gli oggetti sopra la tramoggia in x=6. Finisce in x=35, dove tre tramogge scendono nel baule *Troppo pieno*.
+La catena **H** è fatta di tramogge al livello y=3, nella fila z=9, con il beccuccio a est. Parte dal baule *Deposito* (x=4), che H svuota da sotto, e dal canale d'acqua del podio, che porta gli oggetti sopra la tramoggia in x=6. Finisce in x=35, dove tre tramogge scendono nel barile *Troppo pieno*.
 
 Ci sono 9 **fette**, una ogni 3 blocchi a x = 8, 11, …, 32. Questa è la fetta a x = X, in coordinate del `Builder`:
 
@@ -158,8 +158,8 @@ Funzionamento:
 
   Il test `test_golems_can_only_spawn_on_the_platform` ricostruisce questi tentativi. Nel raggio, l'unica superficie dove un golem può nascere e starci è la piattaforma d'acqua: tutto il resto è vetro, vetro colorato, coperto, oppure fuori quota. Per questo le pareti esterne sono lisce tra y=7 e y=20.
 - **Resa, ragionata**:
-  - **Giorno**: dopo ogni golem i villager aspettano 600 tick. Il golem muore nella lava in circa 10-15 secondi, poi al tentativo successivo, ogni 100 tick, ne nasce un altro. Il ciclo è quindi di circa 35-45 secondi, cioè circa 80-100 golem all'ora con lo zombie visibile. Con 3-5 lingotti per golem (media 4) fanno circa **320-400 lingotti all'ora**, più 0-2 papaveri per golem.
-  - **Media sulle 24 ore**: lo zombie è nascosto di notte, quindi la farm funziona circa metà del tempo e la media scende a circa **160-220 all'ora**.
+  - **Giorno**: dopo ogni golem i villager aspettano 600 tick. Il golem muore nella lava in circa 10-15 secondi, poi al tentativo successivo, ogni 100 tick, ne nasce un altro. Contando la caduta, circa 12 secondi nella lava, le 600 tick di attesa e fino a 100 tick per il tentativo successivo, il ciclo è di circa 45-55 secondi, cioè circa 65-80 golem all'ora con lo zombie visibile. Con 3-5 lingotti per golem (media 4) fanno circa **260-320 lingotti all'ora**, più 0-2 papaveri per golem.
+  - **Media sulle 24 ore**: lo zombie è nascosto di notte, quindi la farm funziona circa metà del tempo e la media scende a circa **130-170 all'ora**.
 
   Sono stime ragionate, non misurate: vanno confermate in gioco.
 - **Mob cap**: villager e golem non contano nel limite dei mostri. Lo zombie occupa al massimo 1 dei 70 posti.
@@ -197,7 +197,7 @@ Le coordinate sono quelle del `Builder`; V = 14 è la quota dei letti.
 - **Linea di vista**: l'occhio dei villager sta a 16,18 e quello dello zombie a 16,24, quindi la linea passa tutta nella feritoia. Il test `test_villagers_see_the_zombie_only_through_the_open_slot` la ricostruisce: è libera a feritoia aperta e chiusa quando il blocco è spinto giù. La distanza dallo zombie è al massimo 4,1 blocchi, sotto il limite di 8.
 - **Pistone**: un pistone appiccicoso in (9, 18, 9), con `facing=down`, spinge il blocco di pietra liscia (9, 17, 9) dentro l'apertura (9, 16, 9).
 - **Giorno e notte**:
-  - il sensore di luce diurna (normale) in (10, 19, 11) sta sotto un lucernario di vetro;
+  - il sensore di luce diurna (normale) in (10, 19, 11) sta in fondo a un pozzo di vetro che attraversa il tetto fino al cielo (un test controlla che nulla di opaco lo copra);
   - una polvere in (9, 19, 11) poggia sul blocco S3 in (9, 18, 11);
   - una torcia a muro in (9, 18, 10), `facing=north`, è attaccata a S3 e accanto al pistone.
 
@@ -246,7 +246,7 @@ Le coordinate sono quelle del `Builder`; V = 14 è la quota dei letti.
    - la feritoia si riapre;
    - nel giro di 1-2 minuti un golem deve nascere sull'acqua, essere spinto nel foro e morire nella lava;
    - il ferro deve arrivare nei bauli.
-5. **Leva** accanto al pozzo:
+5. **Leva** nella nicchia del muro ovest del piano terra:
    - accesa: la feritoia si chiude anche di giorno e non nascono golem;
    - spenta: si torna al ciclo giorno/notte.
 6. **Se qualcosa non va**:

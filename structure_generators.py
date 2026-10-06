@@ -359,13 +359,13 @@ def _profile(terrain, axis, center, lo, hi, half, clearance, integrate, start_de
     pre, post = [], []
     if start_deck is None:
         v, i = deck[0], lo - 1
-        while len(pre) < 30 and ground.get(i) is not None and v - slope > ground[i] + 0.01:
+        while len(pre) < 30 and ground.get(i) is not None and v - slope >= ground[i] - 0.01:
             v -= slope
             pre.append(v)
             i -= 1
     if end_deck is None:
         v, i = deck[-1], hi + 1
-        while len(post) < 30 and ground.get(i) is not None and v - slope > ground[i] + 0.01:
+        while len(post) < 30 and ground.get(i) is not None and v - slope >= ground[i] - 0.01:
             v -= slope
             post.append(v)
             i += 1

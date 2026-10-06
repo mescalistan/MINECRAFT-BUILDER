@@ -237,28 +237,20 @@ def download_structure(url, dest_path, templates_dir):
         r = requests.get(url, headers=HEADERS, stream=True, timeout=12)
         if r.status_code == 200:
             os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
-            with open(dest_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            tmp = dest_path + ".part"
+            try:
+                with open(tmp, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                os.replace(tmp, dest_path)      # an interrupted download never leaves a broken file
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
             return True
         else:
             print(f"Web download returned status code {r.status_code}")
     except Exception as e:
         print(f"Web download error: {e}")
         
-    # Fallback to templates if it was a curated item but connection failed
-    for item in CURATED_ONLINE_CATALOG:
-        if item["download_url"] == url:
-            # Match titles to copy local
-            if "Wheat" in item["title"]:
-                fallback_path = os.path.join(templates_dir, "wheat_farm.nbt")
-            elif "House" in item["title"]:
-                fallback_path = os.path.join(templates_dir, "modern_house.nbt")
-            else:
-                fallback_path = os.path.join(templates_dir, "auto_warehouse.nbt")
-                
-            if os.path.exists(fallback_path):
-                shutil.copy2(fallback_path, dest_path)
-                return True
-                
+    # (no silent fallback: copying a different structure under this name would mislead the user)
     return False

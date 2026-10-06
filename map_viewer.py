@@ -8,7 +8,7 @@ from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QTransform, QFo
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QTimer, QThread
 
 import map_tiles
-from mca_codec import MCARegion, read_world_surface, surface_heights
+from mca_codec import MCARegion, read_world_surface, surface_heights, chunk_is_full
 
 TILE = map_tiles.TILE
 
@@ -152,7 +152,8 @@ class MapViewer(QWidget):
     rotate_requested = pyqtSignal()            # R key pressed
     bridge_requested = pyqtSignal(int, int, int, int)  # grid x/z of the two banks
     area_selected = pyqtSignal(int, int, int, int)     # grid x1, z1, x2, z2 of the selected area
-    mode_cancelled = pyqtSignal()
+    mode_cancelled = pyqtSignal(str)                   # mode that was left with Esc
+    unlocked = pyqtSignal()                            # right click: the placement follows the mouse again
     point_selected = pyqtSignal(int, int)              # grid x/z of a single click ("point" mode)
     game_structures_changed = pyqtSignal()             # a rendered tile brought new game structures
     polygon_finished = pyqtSignal(object, bool)        # grid points of a drawn perimeter, closed?
@@ -429,10 +430,12 @@ class MapViewer(QWidget):
                     self._sync_regions[rkey] = region
             if region is not None:
                 heights = region.quick_surface((cx, cz))
-                if heights is None and (cx, cz) in region.chunks:
+                if heights == []:
+                    heights = None               # still being generated: no height to propose
+                elif heights is None and (cx, cz) in region.chunks:
                     try:
                         chunk, _ = region.chunks[(cx, cz)]
-                        heights = read_world_surface(chunk)
+                        heights = read_world_surface(chunk) if "Level" in chunk or chunk_is_full(chunk) else None
                         if heights is None and chunk.get("sections") and "Level" not in chunk:
                             heights, _ = surface_heights(chunk)
                     except KeyError:
@@ -744,7 +747,8 @@ class MapViewer(QWidget):
 
     def _draw_hint(self, painter):
         """One line of help at the top of the map while drawing or editing a line."""
-        text = getattr(self, "hint_text", None)
+        text = getattr(self, "hint_text", None) or (getattr(self, "hint_message", None)
+                                                      if self.mode == "polygon" else None)
         if not text:
             if self.mode == "polygon":
                 n = len(self.poly_points)
@@ -1108,10 +1112,17 @@ class MapViewer(QWidget):
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
         elif event.button() == Qt.MouseButton.RightButton:
             # Right-click unlocks placement to follow mouse
-            self.is_locked = False
+            if self.is_locked:
+                self.is_locked = False
+                self.unlocked.emit()
             self.update()
 
     def _finish_polygon(self, closed):
+        if len(self.poly_points) < 2:
+            self.hint_message = "Servono almeno due punti: continua a cliccare sulla mappa (Esc per uscire)"
+            self.update()
+            return
+        self.hint_message = None
         pts = list(self.poly_points)
         self.poly_points = []
         if len(pts) >= 2:
@@ -1246,8 +1257,9 @@ class MapViewer(QWidget):
                 self.update()
                 return
         if key == Qt.Key.Key_Escape and self.mode != "place":
+            left = self.mode
             self.set_mode("place")
-            self.mode_cancelled.emit()
+            self.mode_cancelled.emit(left)
             return
         if key == Qt.Key.Key_R and self.selected_structure:
             # The main window owns the selected structure: rotating only the preview

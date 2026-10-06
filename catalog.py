@@ -8,6 +8,7 @@ Unisce:
 """
 import json
 import os
+import re
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 USER_CATALOG = os.path.join(TEMPLATES_DIR, "user_catalog.json")
@@ -121,18 +122,32 @@ def category_for(name):
     if name in CATEGORY_OF:
         return CATEGORY_OF[name]
     low = name.lower()
+    tokens = set(re.split(r"[^a-z0-9]+", low))
     for words, category in _GUESS:
-        if any(w in low for w in words):
+        # whole words ("dwelling" is not a "well"), or the start of a word for the Italian stems
+        if any(w in tokens or (len(w) >= 5 and any(t.startswith(w) for t in tokens)) or ("_" in w and w in low)
+               for w in words):
             return category
     return "Altro"
 
 
 def _load_json(path):
+    """List of catalog entries; anything malformed (wrong shape, missing file name) is skipped."""
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for e in data:
+        if isinstance(e, dict) and isinstance(e.get("file"), str) and e["file"]:
+            e = dict(e)
+            if not isinstance(e.get("title"), str) or not e["title"]:
+                e["title"] = os.path.splitext(e["file"])[0].replace("_", " ").title()
+            out.append(e)
+    return out
 
 
 def load_user_catalog():
@@ -144,8 +159,10 @@ def add_user_entry(file, title, category="Ritagli", description="", extra=None):
     entry = {"file": file, "title": title, "category": category, "description": description}
     entry.update(extra or {})
     entries.append(entry)
-    with open(USER_CATALOG, "w", encoding="utf-8") as f:
+    tmp = USER_CATALOG + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(entries, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, USER_CATALOG)
 
 
 def load_catalog(templates_dir=TEMPLATES_DIR):

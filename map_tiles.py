@@ -225,6 +225,8 @@ def chunk_structures(chunk, rx, rz):
 
 def _column_heights(region, key, chunk=None):
     h = None if chunk is not None else region.quick_surface(key)
+    if h == []:
+        return None, None            # chunk not fully generated
     if h is not None:
         return h, None
     if chunk is None:
@@ -292,7 +294,8 @@ def build_tile(path, detailed=True, cancelled=lambda: False):
         if done % 64 == 0:
             region.chunks.clear_cache()
     region.chunks.clear_cache()
-    return {"heights": heights, "rgb": rgb, "depth": depth, "structures": structures, "detailed": detailed}
+    return {"heights": heights, "rgb": rgb, "depth": depth, "structures": structures, "detailed": detailed,
+            "complete": not region._bad}
 
 
 def shade(tile):
@@ -361,7 +364,7 @@ class TileCache:
     @staticmethod
     def _stamp(path):
         st = os.stat(path)
-        return [st.st_size, int(st.st_mtime)]
+        return [st.st_size, st.st_mtime_ns]
 
     def _file(self, rx, rz):
         return os.path.join(self.dir, f"r.{rx}.{rz}.tile")
@@ -391,10 +394,10 @@ class TileCache:
         except (OSError, ValueError, zlib.error, KeyError):
             return None
 
-    def save(self, rx, rz, path, tile):
+    def save(self, rx, rz, path, tile, stamp=None):
         try:
             os.makedirs(self.dir, exist_ok=True)
-            head = json.dumps({"v": CACHE_VERSION, "stamp": self._stamp(path), "detailed": tile["detailed"],
+            head = json.dumps({"v": CACHE_VERSION, "stamp": stamp or self._stamp(path), "detailed": tile["detailed"],
                                "structures": tile["structures"]}).encode("utf-8")
             heights = array.array("h", tile["heights"])
             if sys.byteorder != "little":
@@ -438,10 +441,14 @@ def render_job(path, rx, rz, region_dir, detailed, cache_root=None):
     cache = TileCache(region_dir, root=cache_root)
     tile = cache.load(rx, rz, path) if detailed else None
     if tile is None:
+        try:
+            stamp = TileCache._stamp(path)       # taken before reading: a write meanwhile invalidates it
+        except OSError:
+            stamp = None
         tile = build_tile(path, detailed=detailed)
         if tile is None:
             return None
-        if detailed:
-            cache.save(rx, rz, path, tile)
+        if detailed and stamp and tile.get("complete", True):
+            cache.save(rx, rz, path, tile, stamp)
     return {"image": shade(tile), "heights": tile["heights"], "structures": tile["structures"],
             "detailed": tile["detailed"]}

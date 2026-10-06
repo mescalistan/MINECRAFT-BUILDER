@@ -106,9 +106,12 @@ class BuildAndDemolishTests(unittest.TestCase):
         self.assertNotEqual(after[(75, GROUND_Y, 50)], "minecraft:grass_block")   # the new stretch is built
 
     def test_footprint_text_round_trip(self):
-        fp = {"columns": [[1, 2, 63, 60, 70, 0], [-5, 7, 62, 62, 66, -1]], "surfaces": ["minecraft:sand"]}
+        fp = {"columns": [[1, 2, 63, 60, 70, 0, 60, 0, 0, 0, 0], [-5, 7, 62, 62, 66, -1, 63, 0, 0]],
+              "surfaces": ["minecraft:sand"], "v": 2}
         self.assertEqual(footprint_from_text(footprint_to_text(fp)), fp)
         self.assertEqual(footprint_from_text(None), {"columns": [], "surfaces": []})
+        old = {"cols": "1,2,63,60,70,0,0,0,0,0", "surfaces": ["minecraft:sand"]}      # records before v2
+        self.assertEqual(footprint_from_text(old)["v"], 1)
 
 
 class RoadSnapTests(unittest.TestCase):

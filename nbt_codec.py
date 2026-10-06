@@ -80,12 +80,39 @@ _STR_CACHE = {}
 _STR_CACHE_MAX = 8192
 
 
+def decode_mutf8(raw):
+    """Java 'modified UTF-8': NUL is C0 80, characters beyond U+FFFF are two 3-byte surrogates."""
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        pass
+    raw = bytes(raw).replace(b'\xc0\x80', b'\x00')
+    s = raw.decode('utf-8', errors='surrogatepass')
+    # recombine the surrogate pairs into real characters
+    return s.encode('utf-16-le', errors='surrogatepass').decode('utf-16-le', errors='replace')
+
+
+def encode_mutf8(s):
+    if s.isascii() and '\x00' not in s:
+        return s.encode('ascii')
+    out = []
+    for ch in s:
+        c = ord(ch)
+        if c > 0xFFFF:
+            c -= 0x10000
+            out.append(chr(0xD800 + (c >> 10)))
+            out.append(chr(0xDC00 + (c & 0x3FF)))
+        else:
+            out.append(ch)
+    return ''.join(out).encode('utf-8', errors='surrogatepass').replace(b'\x00', b'\xc0\x80')
+
+
 def _read_string(buf, pos):
     end = pos + 2 + ((buf[pos] << 8) | buf[pos + 1])
     raw = buf[pos + 2:end]
     s = _STR_CACHE.get(raw)
     if s is None:
-        s = TAG_String(raw.decode('utf-8', errors='replace'))
+        s = TAG_String(decode_mutf8(raw))
         if len(raw) <= 64 and len(_STR_CACHE) < _STR_CACHE_MAX:
             _STR_CACHE[raw] = s
     return s, end
@@ -259,7 +286,9 @@ def to_nbt(val):
 
 
 def _write_string(out, val):
-    b = val.encode('utf-8')
+    b = encode_mutf8(val)
+    if len(b) > 0xFFFF:
+        raise ValueError(f"Testo NBT troppo lungo ({len(b)} byte, massimo 65535)")
     out += _UH.pack(len(b))
     out += b
 

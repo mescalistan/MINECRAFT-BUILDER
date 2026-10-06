@@ -169,12 +169,11 @@ def generate_village(center, style, size, terrain, load, seed=None):
     for arm in ORDER:
         dx, dz = DIR[arm]
         for t in range(r0, road_len + 1):
-            for o in range(-ROAD_HALF, ROAD_HALF + 1):
-                x = cx + dx * t + (o if dz else 0)
-                z = cz + dz * t + (o if dx else 0)
-                if terrain.height(x, z) is None or terrain.is_water(x, z):
-                    break
-                road.add((x, z))
+            cells = [(cx + dx * t + (o if dz else 0), cz + dz * t + (o if dx else 0))
+                     for o in range(-ROAD_HALF, ROAD_HALF + 1)]
+            if any(terrain.height(x, z) is None or terrain.is_water(x, z) for x, z in cells):
+                break                        # the arm stops at the river: no road (and houses) beyond it
+            road.update(cells)
     plan.paths |= road
     plan.reserved |= road
 

@@ -16,6 +16,21 @@ SQ3 = math.sqrt(3)
 ALL6 = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
 
+def fill_roof_cavity(b, x1, x2, z1, z2, y, block):
+    """
+    The hollow inside a hip roof is a sealed dark attic where mobs can spawn: fill it.
+    Only cells enclosed by the roof (some roof block above them in the same column) are filled.
+    """
+    for x in range(x1, x2 + 1):
+        for z in range(z1, z2 + 1):
+            above = [yy for yy in range(y, b.h) if b.get(x, yy, z) not in (None, AIR)]
+            if not above:
+                continue
+            for yy in range(y, max(above)):
+                if b.get(x, yy, z) in (None, AIR):
+                    b.set(x, yy, z, block)
+
+
 def seal_underground(b, top, filler=(("deepslate", 6), ("tuff", 2), ("cobbled_deepslate", 1))):
     """
     Underground builds: every open cell (air, stairs, water...) below 'top' gets solid neighbours where
@@ -51,7 +66,7 @@ def seal_underground(b, top, filler=(("deepslate", 6), ("tuff", 2), ("cobbled_de
 # F contiene 41 oggetti bersaglio + 4 riempitivi rinominati: segnale 2, che si spegne prima di arrivare a S
 # (2 -> 1 -> 0). Al 42esimo oggetto il segnale e' 3: la terza polvere ha forza 1, alimenta S, la torcia si
 # spegne, L si sblocca e preleva un oggetto da F, che torna a 41. Se il barile e' pieno F si riempie, smette
-# di prelevare da H e gli oggetti proseguono lungo la catena fino al baule di troppo pieno (anti-overflow).
+# di prelevare da H e gli oggetti proseguono lungo la catena fino al barile di troppo pieno (anti-overflow).
 
 FILTER_COUNT = 41
 FILLER = ("stick", "Filtro")          # bastoni rinominati: non si impilano mai con quelli normali
@@ -270,7 +285,8 @@ def _hub_gallery(b):
     b.set(35, 3, HUB_ZF, "hopper", facing="down", enabled="true")
     b.set(35, 2, HUB_ZF, "hopper", facing="down", enabled="true")
     b.set(35, 1, HUB_ZF, "hopper", facing="south", enabled="true")
-    b.chest(35, 1, 10, "south")
+    # a barrel opens even with a solid block on top (a chest would stay shut under the wall)
+    b.set(35, 1, 10, "barrel", facing="south", open="false")
     b.contents(35, 1, 10, [], name="Troppo pieno")
     # wall face above the barrels
     for x in range(x1, x2 + 1):
@@ -305,8 +321,9 @@ def _hub_gallery(b):
     for i, z in enumerate((12, 11, 10, 9), start=1):
         b.set(6, 4, z, "water", level=i)
     b.set(6, 4, 14, "polished_blackstone_bricks")
-    for x in (2, 7):                                          # dais railing
+    for x in range(2, 8):                                     # dais railing (4-block drop)
         b.set(x, 5, 14, "polished_blackstone_wall")
+    b.set(7, 5, 11, "polished_blackstone_wall")
     b.lantern(2, 6, 14)
     b.lantern(7, 6, 14)
     for i, x in enumerate((8, 9, 10)):                        # steps down to the gallery floor
@@ -405,6 +422,8 @@ def _hub_tower(b):
     b.set(ex, top + 2, ez, "polished_blackstone_bricks")
     b.door(ex, 1, ez - 1, "south", wood="dark_oak")
     b.door(ex, top, ez + 1, "north", wood="dark_oak")
+    # door at the foot of the stair: mobs wandering down from the kiosk do not reach the hall
+    b.door(ex, 1, ez - 3, "north", wood="dark_oak")
     return ring
 
 
@@ -448,6 +467,7 @@ def _hub_kiosk(b):
         for z in range(z1 + 1, z2):
             b.set(x, g + 8, z, "deepslate_tiles")
     b.hip_roof(x1 + 1, x2 - 1, z1 + 1, z2 - 1, g + 9, "deepslate_tile", "deepslate_tiles", overhang=1)
+    fill_roof_cavity(b, x1, x2, z1, z2, g + 9, "deepslate_tiles")
     for y in range(g + 13, g + 15):
         b.set(ex, y, ez, "polished_blackstone_wall")
     b.set(ex, g + 15, ez, "lightning_rod", facing="up", powered="false")
@@ -461,7 +481,7 @@ def _hub_kiosk(b):
           "Hub e magazzini",
           "Sala esagonale gotico-industriale 22 blocchi sotto terra con cupola a costoloni e lampadario, "
           "quattro stazioni (incanti, alchimia, officina, fonderia), galleria-magazzino con smistatore "
-          "automatico a 9 oggetti (barili con nome, baule di troppo pieno, deposito con canale d'acqua), "
+          "automatico a 9 oggetti (barili con nome, barile di troppo pieno, deposito con canale d'acqua), "
           "ascensore a bolle di sabbia delle anime con scala a chiocciola e chiosco in superficie, porte di "
           "servizio a est e ovest per agganciare altri moduli. Redstone tutta nascosta dietro le pareti; "
           "i filtri e i nomi dei barili sono gia' scritti dall'app.")
@@ -523,13 +543,13 @@ def _farm_coords():
           "Iron farm compatta per Java 1.21+ dentro una fonderia di mattoni e ardesia: 3 villager sui letti e "
           "1 zombie (scritti dall'app), piattaforma d'acqua che porta i golem in un pozzo con lama di lava "
           "sostenuta da cartelli, tramogge e 4 bauli al piano terra. Di notte un sensore di luce chiude la "
-          "feritoia dello zombie per far dormire i villager; la leva accanto al pozzo spegne la farm. "
-          "Circa 300-400 lingotti all'ora di giorno: vedi la checklist nel README prima di usarla.")
+          "feritoia dello zombie per far dormire i villager; la leva nel muro ovest del piano terra spegne la farm. "
+          "Circa 260-320 lingotti all'ora di giorno: vedi la checklist nel README prima di usarla.")
 def iron_farm():
     o = FARM_O
     V = FARM_V
     c = _farm_coords()
-    b = Builder(FARM_W, V + 15, FARM_W, seed=1214)
+    b = Builder(FARM_W, V + 17, FARM_W, seed=1214)
     x0, x1 = o, o + 15                          # building footprint
     p0, p1 = c["platform"]
     h0, h1 = c["hole"]
@@ -730,6 +750,12 @@ def iron_farm():
     for x, z in ((o + 5, o + 5), (o + 10, o + 5), (o + 5, o + 12), (o + 12, o + 12)):
         b.set(x, roof, z, "glass")
     b.hip_roof(x0, x1, x0, x1, roof + 1, "deepslate_tile", "deepslate_tiles", overhang=1)
+    fill_roof_cavity(b, x0 - 1, x1 + 1, x0 - 1, x1 + 1, roof + 1, "deepslate_tiles")
+    # glass shaft through the roof: the daylight detector must see the open sky
+    dxs, _, dzs = c["daylight"]
+    for y in range(roof + 1, b.h):
+        if b.get(dxs, y, dzs) not in (None, AIR):
+            b.set(dxs, y, dzs, "glass")
     for y in range(roof + 1, roof + 9):
         for x in (x0 + 2, x0 + 4):
             for z in (x1 - 4, x1 - 2):

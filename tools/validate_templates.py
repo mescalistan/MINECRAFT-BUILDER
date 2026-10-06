@@ -328,7 +328,8 @@ def sky_light_map(grid):
     for x in range(-1, grid.w + 1):
         for z in range(-1, grid.l + 1):
             for y in range(grid.h, grid.ymin - 1, -1):
-                if bi.blocks_light(grid.name(x, y, z)):
+                n = grid.name(x, y, z)
+                if bi.blocks_light(n) or n.endswith(("_stairs", "_slab")):   # their bottom face stops the sky
                     break
                 level[(x, y, z)] = 15
                 q.append((x, y, z))
@@ -354,6 +355,31 @@ INDOOR_SKY = 11  # cells with less sky light than this are considered "indoors"
 
 def check_dark_spots(grid, warnings, stats):
     """Indoor floor cells with block light 0: mobs can spawn there day and night."""
+    dark = find_dark(grid)
+    stats["dark_spots"] = len(dark)
+    if dark:
+        warnings.append(f"{len(dark)} punti interni bui dove possono nascere mob, es. {dark[:4]}")
+
+
+def auto_light(struct, max_lights=60):
+    """
+    Lanterns to add so that no indoor spot stays dark (sealed attics, corners of big halls).
+    Returns structure positions (x, y, z); each lantern stands on the floor of a dark spot.
+    """
+    grid = Grid(struct)
+    added = []
+    for _ in range(max_lights):
+        dark = find_dark(grid)
+        if not dark:
+            break
+        x, y, z = dark[len(dark) // 2]
+        grid.names[(x, y, z)] = "lantern"
+        grid.props[(x, y, z)] = {"hanging": "false", "waterlogged": "false"}
+        added.append((x, y + grid.g, z))
+    return added
+
+
+def find_dark(grid):
     level = light_map(grid)
     sky = sky_light_map(grid)
     dark = []
@@ -370,9 +396,7 @@ def check_dark_spots(grid, warnings, stats):
                     continue
                 if level.get((x, y, z), 0) == 0:
                     dark.append((x, y, z))
-    stats["dark_spots"] = len(dark)
-    if dark:
-        warnings.append(f"{len(dark)} punti interni bui dove possono nascere mob, es. {dark[:4]}")
+    return dark
 
 
 def validate(struct):
