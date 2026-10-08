@@ -1,5 +1,29 @@
 [
  {
+  "file": "auto_blast_smelter.nbt",
+  "title": "Altoforno automatico (8 altoforni, minerali)",
+  "category": "Farm automatiche",
+  "description": "Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 8 blocchi e raccolgono tutto il prodotto nella cassa in fondo."
+ },
+ {
+  "file": "auto_smoker_kitchen.nbt",
+  "title": "Cucina automatica (6 affumicatori, cibo)",
+  "category": "Farm automatiche",
+  "description": "Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 6 blocchi e raccolgono tutto il prodotto nella cassa in fondo."
+ },
+ {
+  "file": "auto_super_smelter_grande.nbt",
+  "title": "Super fornace automatica (16 fornaci)",
+  "category": "Farm automatiche",
+  "description": "Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 16 fornaci e raccolgono tutto il prodotto nella cassa in fondo."
+ },
+ {
+  "file": "auto_super_smelter.nbt",
+  "title": "Super fornace automatica (8 fornaci)",
+  "category": "Farm automatiche",
+  "description": "Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 8 fornaci e raccolgono tutto il prodotto nella cassa in fondo."
+ },
+ {
   "file": "alpine_chalet.nbt",
   "title": "Alpine Chalet",
   "category": "Case",
@@ -154,6 +178,120 @@
   "title": "Crop Farm (Mixed)",
   "category": "Fattorie e animali",
   "description": "Campo idratato con grano, carote, patate e barbabietole, recintato."
+ },
+ {
+  "file": "auto_bamboo_farm.nbt",
+  "title": "Farm automatica di bambu' (16 piante)",
+  "category": "Farm automatiche",
+  "description": "2 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_bamboo_farm_moderna.nbt",
+  "title": "Farm automatica di bambu' (32 piante)",
+  "category": "Farm automatiche",
+  "description": "4 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_bamboo_farm_grande.nbt",
+  "title": "Farm automatica di bambu' (48 piante)",
+  "category": "Farm automatiche",
+  "description": "6 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_sugar_cane_farm.nbt",
+  "title": "Farm automatica di canna da zucchero (16 piante)",
+  "category": "Farm automatiche",
+  "description": "2 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_sugar_cane_farm_moderna.nbt",
+  "title": "Farm automatica di canna da zucchero (32 piante)",
+  "category": "Farm automatiche",
+  "description": "4 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_sugar_cane_farm_grande.nbt",
+  "title": "Farm automatica di canna da zucchero (48 piante)",
+  "category": "Farm automatiche",
+  "description": "6 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa."
+ },
+ {
+  "file": "auto_wool_farm_grande.nbt",
+  "title": "Farm automatica di lana (24 pecore)",
+  "category": "Farm automatiche",
+  "description": "24 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa."
+ },
+ {
+  "file": "auto_wool_farm.nbt",
+  "title": "Farm automatica di lana bianca (8 pecore)",
+  "category": "Farm automatiche",
+  "description": "8 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa."
+ },
+ {
+  "file": "auto_wool_farm_colori.nbt",
+  "title": "Farm automatica di lana colorata (16 pecore)",
+  "category": "Farm automatiche",
+  "description": "16 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa."
+ },
+ {
+  "file": "auto_melon_farm_moderna.nbt",
+  "title": "Farm automatica di meloni (16 gambi)",
+  "category": "Farm automatiche",
+  "description": "16 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_melon_farm_grande.nbt",
+  "title": "Farm automatica di meloni (22 gambi)",
+  "category": "Farm automatiche",
+  "description": "22 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_melon_farm.nbt",
+  "title": "Farm automatica di meloni (8 gambi)",
+  "category": "Farm automatiche",
+  "description": "8 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_pumpkin_farm_moderna.nbt",
+  "title": "Farm automatica di zucche (16 gambi)",
+  "category": "Farm automatiche",
+  "description": "16 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_pumpkin_farm_grande.nbt",
+  "title": "Farm automatica di zucche (22 gambi)",
+  "category": "Farm automatiche",
+  "description": "22 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_pumpkin_farm.nbt",
+  "title": "Farm automatica di zucche (8 gambi)",
+  "category": "Farm automatiche",
+  "description": "8 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa."
+ },
+ {
+  "file": "auto_cactus_farm.nbt",
+  "title": "Farm di cactus (25 cactus)",
+  "category": "Farm automatiche",
+  "description": "Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone."
+ },
+ {
+  "file": "auto_cactus_farm_grande.nbt",
+  "title": "Farm di cactus (61 cactus)",
+  "category": "Farm automatiche",
+  "description": "Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone."
+ },
+ {
+  "file": "auto_lava_farm_grande.nbt",
+  "title": "Farm di lava (25 calderoni)",
+  "category": "Farm automatiche",
+  "description": "25 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio."
+ },
+ {
+  "file": "auto_lava_farm.nbt",
+  "title": "Farm di lava (9 calderoni)",
+  "category": "Farm automatiche",
+  "description": "9 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio."
  },
  {
   "file": "greenhouse.nbt",

@@ -127,6 +127,12 @@ def _support_ok(grid, x, y, z, n, props):
         return any(grid.name(x + dx, y - 1, z + dz) == "water" for dx, dz in DIRS.values())
     if n == "cactus":
         return below in ("sand", "red_sand", "cactus") or y == 0
+    if n == "pointed_dripstone":
+        # hanging from the block above (down) or standing on the block below (up)
+        other = above if props.get("vertical_direction", "down") == "down" else below
+        return other == "pointed_dripstone" or bi.is_full_solid(other)
+    if n in ("melon_stem", "pumpkin_stem", "attached_melon_stem", "attached_pumpkin_stem"):
+        return below == "farmland"
     if bi.is_plant(n) and n not in ("vine", "glow_lichen", "kelp", "kelp_plant", "seagrass", "tall_seagrass",
                                     "cocoa", "hanging_roots", "lily_pad", "nether_wart") and not n.endswith("_stem"):
         if props.get("half") == "upper":

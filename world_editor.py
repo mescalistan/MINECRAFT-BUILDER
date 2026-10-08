@@ -2,9 +2,12 @@
 World-level block editing across multiple region files, plus the structure
 injection routine used by the GUI worker thread.
 """
+import gzip
 import json
 import math
 import os
+import zlib
+from array import array
 import time
 import uuid
 
@@ -14,8 +17,10 @@ from mca_codec import (
     MCARegion, ChunkEditor, AIR_NAMES, block_key, chunk_is_full, read_world_surface,
     chunk_format_supported,
 )
+from nbt_codec import parse_nbt_bytes, nbt_to_bytes
 
 AIR_STATE = TAG_Compound({"Name": TAG_String("minecraft:air")})
+_AIR_KEY = block_key(AIR_STATE)
 
 # Blocks skipped while looking for the ground under a structure
 _NON_GROUND_HINTS = (
@@ -104,6 +109,7 @@ def to_state(block):
 
 
 TEXT_COMPONENT_NBT_VERSION = 4325   # 1.21.5: names are stored as text components, no longer as JSON
+ITEM_COMPONENTS_VERSION = 3837      # 1.20.5: items have "count" and "components" instead of "Count" and "tag"
 
 
 def adapt_block_data(data, version):
@@ -129,7 +135,17 @@ def adapt_block_data(data, version):
         new_items = []
         for item in items:
             comps = item.get("components")
-            if comps and isinstance(comps.get("minecraft:custom_name"), str):
+            if version < ITEM_COMPONENTS_VERSION:
+                # 1.20.4 and older: byte "Count" and the name in tag.display.Name
+                old = TAG_Compound({"id": item.get("id", TAG_String("minecraft:air")),
+                                    "Count": TAG_Byte(int(item.get("count", item.get("Count", 1))))})
+                if "Slot" in item:
+                    old["Slot"] = item["Slot"]
+                if comps and isinstance(comps.get("minecraft:custom_name"), str):
+                    old["tag"] = TAG_Compound({"display": TAG_Compound(
+                        {"Name": to_json(comps["minecraft:custom_name"])})})
+                item = old
+            elif comps and isinstance(comps.get("minecraft:custom_name"), str):
                 item = TAG_Compound(item)
                 item["components"] = TAG_Compound(comps)
                 item["components"]["minecraft:custom_name"] = to_json(comps["minecraft:custom_name"])
@@ -147,6 +163,8 @@ class World:
         self._editors = {}   # (chunk_x, chunk_z) -> ChunkEditor | None
         self.skipped_chunks = {}  # (chunk_x, chunk_z) -> reason
         self._entities = {}       # (chunk_x, chunk_z) -> [entity compound] to add on save
+        self._versions = {}       # (chunk_x, chunk_z) -> DataVersion of chunks already released
+        self._stored_regions = set()   # regions with chunks re-encoded in memory (release_chunk)
         for region in (preloaded or []):
             self._regions[(region.rx, region.rz)] = region
 
@@ -180,6 +198,31 @@ class World:
                 editor = ChunkEditor(entry[0], chunk_x, chunk_z)
         self._editors[key] = editor
         return editor
+
+    def release_chunk(self, chunk_x, chunk_z):
+        """
+        Big injections: the edits of a chunk are encoded and compressed now and its decoded data is
+        dropped, so the memory used does not grow with the area. Reading it again decodes the new data.
+        """
+        key = (chunk_x, chunk_z)
+        editor = self._editors.get(key)
+        if editor is None:
+            return
+        self._versions[key] = editor.data_version
+        region = self.region(chunk_x >> 5, chunk_z >> 5)
+        if editor.flush():
+            region.store_chunk((chunk_x & 31, chunk_z & 31), editor.nbt)
+            self._stored_regions.add(region)
+        else:
+            region.chunks._decoded.pop((chunk_x & 31, chunk_z & 31), None)
+        del self._editors[key]
+
+    def data_version(self, chunk_x, chunk_z):
+        v = self._versions.get((chunk_x, chunk_z))
+        if v is not None:
+            return v
+        editor = self.editor(chunk_x, chunk_z)
+        return editor.data_version if editor is not None else 0
 
     def forget_chunk(self, chunk_x, chunk_z):
         """Frees the memory of a chunk that was only read (used when scanning large areas)."""
@@ -266,7 +309,7 @@ class World:
         return None
 
     def modified_regions(self):
-        result = []
+        result = [r for r in self._stored_regions]
         for (cx, cz), editor in self._editors.items():
             if editor is not None and editor.dirty:
                 region = self.region(cx >> 5, cz >> 5)
@@ -296,6 +339,7 @@ class World:
             region.save()
         # the regions were reloaded from disk: editors holding the old chunk objects must not be reused
         self._editors = {}
+        self._stored_regions = set()
         if self._entities:
             backups += self._save_entities(backup, log)
         return backups
@@ -324,8 +368,12 @@ class World:
             for cx, cz, ents in chunks:
                 key = (cx & 31, cz & 31)
                 entry = region.chunks.get(key)
-                editor = self.editor(cx, cz)
-                version = editor.data_version if editor is not None else 0
+                if entry is None and key in region._raw:
+                    # the chunk exists but cannot be read: writing a new one would delete its entities
+                    if log:
+                        log(f"Avviso: entita' del chunk {cx}, {cz} illeggibili: {len(ents)} entita' non aggiunte.")
+                    continue
+                version = self.data_version(cx, cz)
                 if entry is None:
                     nbt = TAG_Compound({"DataVersion": TAG_Int(version),
                                         "Position": TAG_Int_Array([cx, cz]),
@@ -380,27 +428,481 @@ class WorldTerrain:
         return self._column(x, z)[1]
 
 
+def _packed_view(struct):
+    """(iterable of (x, y, z, palette index), palette states, block count): no dict per block needed."""
+    blocks = struct.blocks
+    if getattr(blocks, "packed", False):
+        return blocks.iter_xyzs(), blocks.states, len(blocks)
+    states, index, out = [], {}, []
+    for (x, y, z), b in blocks.items():
+        i = index.get(id(b))
+        if i is None:
+            i = index[id(b)] = len(states)
+            states.append(b)
+        out.append((x, y, z, i))
+    return out, states, len(out)
+
+
+# kinds of structure palette entries
+_K_BLOCK, _K_AIR, _K_MODDED = 0, 1, 2
+_FLUID_ENDS = ("water", "lava")
+
+
+def _palette_kinds(states, skip_modded):
+    kinds = []
+    for b in states:
+        name = b.get("Name", "minecraft:air")
+        if name in AIR_NAMES:
+            kinds.append(_K_AIR)
+        elif skip_modded and not name.startswith("minecraft:"):
+            kinds.append(_K_MODDED)
+        else:
+            kinds.append(_K_BLOCK)
+    return kinds
+
+
+def _place_chunk(ed, pos_arr, s_arr, kinds, states, targets, clear_terrain, stats):
+    """
+    Writes the blocks of one chunk straight into its decoded sections. pos = (y << 8) | (z << 4) | x
+    (chunk-local x, z). Every section is looked up once; states are converted once per palette entry.
+    """
+    version = ed.data_version
+    tg = targets.get(version)
+    if tg is None:
+        tg = targets[version] = [None] * len(states)
+    secs = {}
+    load = ed._load
+    dirty = ed._dirty_secs
+    changed = ed._changed
+    placed = cleared = destroyed = skipped_h = skipped_mod = 0
+    air_names = AIR_NAMES
+    fluid = _FLUID_ENDS
+    for p, s in zip(pos_arr, s_arr):
+        kind = kinds[s]
+        if kind == _K_MODDED:
+            skipped_mod += 1
+            continue
+        y = p >> 8
+        sy = y >> 4
+        e = secs.get(sy, 0)
+        if e == 0:
+            e = secs[sy] = load(sy)
+        if e is None:
+            if kind == _K_BLOCK:
+                skipped_h += 1
+            continue
+        palette, indices, lookup = e
+        local = ((y & 15) << 8) | (p & 255)
+        cur_i = indices[local]
+        cur_name = palette[cur_i].get("Name", "minecraft:air")
+        if kind == _K_AIR:
+            if not clear_terrain or cur_name in air_names:
+                continue
+            state, key = AIR_STATE, _AIR_KEY
+            cleared += 1
+            if not cur_name.endswith(fluid):
+                destroyed += 1
+        else:
+            t = tg[s]
+            if t is None:
+                state = to_state(upgrade_block(states[s], version))
+                t = tg[s] = (state, block_key(state))
+            state, key = t
+            placed += 1
+            if cur_name not in air_names and not cur_name.endswith(fluid) and cur_name != state["Name"]:
+                destroyed += 1
+        ti = lookup.get(key)
+        if ti is None:
+            ti = lookup[key] = len(palette)
+            palette.append(state)
+        if cur_i != ti:
+            indices[local] = ti
+            if sy not in dirty:
+                dirty.add(sy)
+            cs = changed.get(sy)
+            if cs is None:
+                cs = changed[sy] = set()
+            cs.add(local)
+    stats["placed"] += placed
+    stats["cleared"] += cleared
+    stats["destroyed"] += destroyed
+    stats["skipped_height"] += skipped_h
+    stats["skipped_modded"] += skipped_mod
+
+
+def _foundation_plan(world, item, ox, oy, oz, cols, base_layer, states):
+    """Foundations under the columns of one chunk (read before its blocks are placed)."""
+    out = []
+    pillar_cols = item.get("pillar_columns")
+    pillars = item.get("extend_columns") or item.get("pillars") or pillar_cols is not None
+    for bx, bz, by, s in cols:
+        # Only columns resting on the structure's lowest layer: arches, bridges and overhangs keep the
+        # empty space below them.
+        if pillar_cols is not None:
+            if (bx, bz) not in pillar_cols:
+                continue
+        elif by != base_layer and not item.get("pillars"):
+            continue
+        gx, gz = ox + bx, oz + bz
+        base_y = oy + by
+        ground = world.ground_y(gx, gz, base_y - 1)
+        if ground is None or ground >= base_y - 1:
+            continue
+        # A big gap means the structure floats on purpose: only small gaps are filled. Structures resting
+        # on water are not propped up either; bridge piers always go down to the bottom.
+        if base_y - 1 - ground > (MAX_PILLAR_DEPTH if pillars else MAX_FOUNDATION_GAP):
+            continue
+        below = world.get_block_name(gx, base_y - 1, gz) or ""
+        if not pillars and ("water" in below or "lava" in below):
+            continue
+        if pillars:
+            bottom = states[s]
+            if not _is_pillar_block(bottom.get("Name", "")):
+                continue        # stairs, banners, levers... hanging under an overhang
+            fill = (bottom, bottom)
+        else:
+            surface = world.get_block_name(gx, ground, gz) or "minecraft:grass_block"
+            fill = tuple({"Name": n} for n in surface_fill_blocks(surface))
+        out.append((gx, gz, ground, base_y, fill))
+    return out
+
+
+def _fill_foundations(world, foundation_cols, stats):
+    for gx, gz, ground, base_y, (surf_block, sub_block) in foundation_cols:
+        surf, sub = to_state(surf_block), to_state(sub_block)
+        for y in range(ground + 1, base_y):
+            if world.set_block(gx, y, gz, surf if y == base_y - 1 else sub):
+                stats["foundation"] += 1
+
+
+def _new_stats():
+    return {"placed": 0, "cleared": 0, "foundation": 0, "landscape": 0, "skipped_missing": 0, "skipped_modded": 0,
+            "skipped_height": 0, "destroyed": 0, "blend": 0, "block_data": 0, "entities": 0,
+            "path": 0, "demolished": 0}
+
+
+class _OneChunkWorld(World):
+    """World view of a single decoded chunk (worker processes)."""
+
+    def __init__(self, editor):
+        self.region_dir = None
+        self._regions = {}
+        self._editors = {(editor.chunk_x, editor.chunk_z): editor}
+        self.skipped_chunks = {}
+        self._entities = {}
+        self._versions = {}
+        self._stored_regions = set()
+
+    def editor(self, chunk_x, chunk_z):
+        return self._editors.get((chunk_x, chunk_z))
+
+
+def _chunk_job(payload, cx, cz, pos_arr, s_arr, kinds, states, clear_terrain, item, ox, oy, oz, cols,
+               base_layer, block_data, stats, targets):
+    """Decodes one chunk, places its blocks, foundations and block data; returns the new payload."""
+    compression, raw = payload
+    data = zlib.decompress(raw) if compression == 2 else gzip.decompress(raw) if compression == 1 else raw
+    nbt, _ = parse_nbt_bytes(data)
+    if not chunk_format_supported(nbt) or not chunk_is_full(nbt):
+        stats["skipped_missing"] += sum(1 for s in s_arr if kinds[s] == _K_BLOCK)
+        reason = ("chunk generato solo in parte" if chunk_format_supported(nbt) else
+                  "chunk in formato pre-1.18 (visita l'area in gioco per aggiornarlo)")
+        stats.setdefault("skipped", []).append(((cx, cz), reason))
+        return None, nbt
+    ed = ChunkEditor(nbt, cx, cz)
+    w = _OneChunkWorld(ed)
+    if cols is None and item.get("foundations"):
+        cols = _chunk_columns(cx, cz, pos_arr, s_arr, kinds, ox, oy, oz)
+    found = _foundation_plan(w, item, ox, oy, oz, cols, base_layer, states) if cols else []
+    _place_chunk(ed, pos_arr, s_arr, kinds, states, targets, clear_terrain, stats)
+    _fill_foundations(w, found, stats)
+    for (x, y, z), d in block_data:
+        name = w.get_block_name(x, y, z)
+        if name is not None and name not in AIR_NAMES:
+            ed.set_block_data(x, y, z, adapt_block_data(d, ed.data_version))
+            stats["block_data"] += 1
+    if not ed.flush():
+        return None, nbt
+    return (2, zlib.compress(nbt_to_bytes(nbt, ""))), nbt
+
+
+def _chunk_columns(cx, cz, pos_arr, s_arr, kinds, ox, oy, oz):
+    """Lowest non-air block of every column of a chunk, in structure coordinates (for the foundations)."""
+    low = {}
+    for p, s in zip(pos_arr, s_arr):
+        if kinds[s] == _K_AIR:
+            continue
+        col, y = p & 255, p >> 8
+        cur = low.get(col)
+        if cur is None or y < cur[0]:
+            low[col] = (y, s)
+    return [(cx * 16 + (col & 15) - ox, cz * 16 + (col >> 4) - oz, y - oy, s) for col, (y, s) in low.items()]
+
+
+def _group_job(args):
+    """Worker process: a slice of a big structure split by world chunk. Returns ({chunk: arrays}, min y)."""
+    xs, ys, zs, si, rot, bw, bl, ox, oy, oz, air = args
+    w1, l1 = bw - 1, bl - 1
+    it = zip(xs, ys, zs, si)
+    if rot == 1:
+        it = ((l1 - z, y, x, s) for x, y, z, s in it)
+    elif rot == 2:
+        it = ((w1 - x, y, l1 - z, s) for x, y, z, s in it)
+    elif rot == 3:
+        it = ((z, y, w1 - x, s) for x, y, z, s in it)
+    groups = {}
+    low = 1 << 30
+    for x, y, z, s in it:
+        if y < low and not air[s]:
+            low = y
+        gx, gz = x + ox, z + oz
+        k = (gx >> 4, gz >> 4)
+        g = groups.get(k)
+        if g is None:
+            g = groups[k] = (array("i"), array("i"))
+        g[0].append(((y + oy) << 8) | ((gz & 15) << 4) | (gx & 15))
+        g[1].append(s)
+    return groups, low
+
+
+def _inject_big(world, item, struct, kinds, states, clear_terrain, fill_foundations, stats, log):
+    """Very large structures: grouping by chunk and placing are both done by worker processes."""
+    from concurrent.futures import ProcessPoolExecutor
+    ox, oy, oz = item["world_x"], item["y_coord"], item["world_z"]
+    blocks = struct.blocks
+    if getattr(blocks, "packed", False):
+        xs, ys, zs, si = blocks.xs, blocks.ys, blocks.zs, blocks.si
+        rot, bw, bl = blocks.rot, blocks.base_w, blocks.base_l
+    else:
+        index = {id(b): i for i, b in enumerate(states)}
+        xs, ys, zs, si = array("i"), array("i"), array("i"), array("i")
+        for (x, y, z), b in blocks.items():
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
+            si.append(index[id(b)])
+        rot, bw, bl = 0, struct.width, struct.length
+    air = bytes(1 if k == _K_AIR else 0 for k in kinds)
+    n = len(xs)
+    parts = _workers() * 2
+    step = -(-n // parts)
+    slices = [(xs[a:a + step], ys[a:a + step], zs[a:a + step], si[a:a + step], rot, bw, bl, ox, oy, oz, air)
+              for a in range(0, n, step)]
+    log(f"  {n} blocchi divisi in {len(slices)} parti, {_workers()} processi...")
+    groups, base_layer = {}, 1 << 30
+    with ProcessPoolExecutor(max_workers=_workers()) as pool:
+        for part, low in pool.map(_group_job, slices):
+            base_layer = min(base_layer, low)
+            for k, (pa, sa) in part.items():
+                g = groups.get(k)
+                if g is None:
+                    groups[k] = (pa, sa)
+                else:
+                    g[0].extend(pa)
+                    g[1].extend(sa)
+    del slices
+    has_blocks = base_layer != 1 << 30
+    base_layer = base_layer if has_blocks else 0
+    data_by_chunk = {}
+    for (bx, by, bz), d in getattr(struct, "block_nbt", {}).items():
+        gx, gy, gz = ox + bx, oy + by, oz + bz
+        data_by_chunk.setdefault((gx >> 4, gz >> 4), []).append(((gx, gy, gz), d))
+    order = sorted(groups, key=lambda k: (k[0] >> 5, k[1] >> 5, k[1], k[0]))
+    _inject_parallel(world, dict(item, foundations=fill_foundations), order, groups, kinds, states,
+                     clear_terrain, ox, oy, oz, None, base_layer, data_by_chunk, stats, log)
+    return base_layer, has_blocks
+
+
+def _region_job(job):
+    """Worker process: a batch of chunks. Returns ({(cx, cz): payload}, versions, stats)."""
+    out, versions = {}, {}
+    stats = _new_stats()
+    targets = {}
+    for (cx, cz), payload, pos_arr, s_arr, cols, block_data in job["chunks"]:
+        cols = None if cols == "worker" else cols
+        try:
+            new, nbt = _chunk_job(payload, cx, cz, pos_arr, s_arr, job["kinds"], job["states"],
+                                  job["clear_terrain"], job["item"], job["ox"], job["oy"], job["oz"], cols,
+                                  job["base_layer"], block_data, stats, targets)
+        except Exception as e:      # a damaged chunk must not stop the others
+            stats.setdefault("errors", []).append(f"chunk {cx},{cz}: {e}")
+            continue
+        versions[(cx, cz)] = int(nbt.get("DataVersion", 0) or 0)
+        if new is not None:
+            out[(cx, cz)] = new
+    return out, versions, stats
+
+
+PARALLEL_MIN_BLOCKS = 300_000      # structures smaller than this are placed in this process
+
+
+def _workers():
+    return max(1, min(8, (os.cpu_count() or 2) - 1))
+
+
+def _inject_structure(world, item, clear_terrain, skip_modded, fill_foundations, stats, log, parallel):
+    struct = item["structure"]
+    ox, oy, oz = item["world_x"], item["y_coord"], item["world_z"]
+    if parallel and len(struct.blocks) >= PARALLEL_MIN_BLOCKS:
+        blocks = struct.blocks
+        states = blocks.states if getattr(blocks, "packed", False) else _dict_palette(blocks)
+        kinds = _palette_kinds(states, skip_modded)
+        result = _inject_big(world, item, struct, kinds, states, clear_terrain, fill_foundations, stats, log)
+        _add_entities(world, struct, ox, oy, oz, stats)
+        return result
+    blocks_iter, states, n_blocks = _packed_view(struct)
+    kinds = _palette_kinds(states, skip_modded)
+    W, L = max(struct.width, 1), max(struct.length, 1)
+    NO = 1 << 30
+    bottom = array("i", [NO]) * (W * L)
+    bottom_s = array("i", [0]) * (W * L)
+    groups = {}
+    for x, y, z, s in blocks_iter:
+        if kinds[s] != _K_AIR and 0 <= x < W and 0 <= z < L:
+            c = x * L + z
+            if y < bottom[c]:
+                bottom[c] = y
+                bottom_s[c] = s
+        gx, gz = x + ox, z + oz
+        k = (gx >> 4, gz >> 4)
+        g = groups.get(k)
+        if g is None:
+            g = groups[k] = (array("i"), array("i"))
+        g[0].append(((y + oy) << 8) | ((gz & 15) << 4) | (gx & 15))
+        g[1].append(s)
+    used = [b for b in bottom if b != NO]
+    base_layer = min(used) if used else 0
+
+    # columns (with their lowest block) and block entity data, chunk by chunk
+    cols_by_chunk = {}
+    if fill_foundations and used:
+        for c in range(W * L):
+            by = bottom[c]
+            if by == NO:
+                continue
+            bx, bz = divmod(c, L)
+            cols_by_chunk.setdefault(((ox + bx) >> 4, (oz + bz) >> 4), []).append((bx, bz, by, bottom_s[c]))
+    data_by_chunk = {}
+    for (bx, by, bz), d in getattr(struct, "block_nbt", {}).items():
+        gx, gy, gz = ox + bx, oy + by, oz + bz
+        data_by_chunk.setdefault((gx >> 4, gz >> 4), []).append(((gx, gy, gz), d))
+
+    order = sorted(groups, key=lambda k: (k[0] >> 5, k[1] >> 5, k[1], k[0]))
+    targets = {}
+    release = n_blocks >= PARALLEL_MIN_BLOCKS      # big but not parallel: keep the memory flat
+    for n, k in enumerate(order):
+        ed = world.editor(*k)
+        pos_arr, s_arr = groups[k]
+        if ed is None:
+            stats["skipped_missing"] += sum(1 for s in s_arr if kinds[s] == _K_BLOCK)
+            continue
+        found = _foundation_plan(world, item, ox, oy, oz, cols_by_chunk.get(k, ()), base_layer, states)
+        _place_chunk(ed, pos_arr, s_arr, kinds, states, targets, clear_terrain, stats)
+        _fill_foundations(world, found, stats)
+        for (gx, gy, gz), d in data_by_chunk.get(k, ()):
+            name = world.get_block_name(gx, gy, gz)
+            if name is not None and name not in AIR_NAMES and world.set_block_data(gx, gy, gz, d):
+                stats["block_data"] += 1
+        if release:
+            world.release_chunk(*k)
+        if n % 500 == 499:
+            log(f"  {n + 1} chunk su {len(order)}...")
+    _add_entities(world, struct, ox, oy, oz, stats)
+    return base_layer, bool(used)
+
+
+def _add_entities(world, struct, ox, oy, oz, stats):
+    for ent in getattr(struct, "entities", ()):
+        ex, ey, ez = ent["pos"]
+        if world.add_entity(ent["nbt"], ox + ex, oy + ey, oz + ez, ent.get("yaw", 0.0)):
+            stats["entities"] += 1
+
+
+def _dict_palette(blocks):
+    """The distinct state dicts of a dict structure (blocks loaded from a file share them)."""
+    seen, out = set(), []
+    for b in blocks.values():
+        if id(b) not in seen:
+            seen.add(id(b))
+            out.append(b)
+    return out
+
+
+def _inject_parallel(world, item, order, groups, kinds, states, clear_terrain, ox, oy, oz, cols_by_chunk,
+                     base_layer, data_by_chunk, stats, log):
+    """Big structures: every region file is processed by a worker process (chunks travel compressed)."""
+    from concurrent.futures import ProcessPoolExecutor
+    plain_states = [{"Name": str(b.get("Name", "minecraft:air")),
+                     "Properties": {k: str(v) for k, v in (b.get("Properties") or {}).items()}} for b in states]
+    item_spec = {k: item.get(k) for k in ("pillar_columns", "extend_columns", "pillars", "foundations")}
+    jobs = {}
+    batch = max(8, len(order) // (_workers() * 4))   # several batches per process: balanced load
+    for k in order:
+        cx, cz = k
+        region = world.region(cx >> 5, cz >> 5)
+        local = (cx & 31, cz & 31)
+        world.release_chunk(cx, cz)                 # in-memory edits of earlier placements go first
+        raw = region._raw.get(local) if region is not None else None
+        pos_arr, s_arr = groups[k]
+        if raw is None or raw[2] or local in region._bad:
+            if raw is not None and raw[2]:         # external .mcc chunk: done in this process
+                ed = world.editor(cx, cz)
+                if ed is not None:
+                    cols = (cols_by_chunk.get(k, []) if cols_by_chunk is not None else
+                            _chunk_columns(cx, cz, pos_arr, s_arr, kinds, ox, oy, oz) if item.get("foundations")
+                            else [])
+                    found = _foundation_plan(world, item, ox, oy, oz, cols, base_layer, states)
+                    _place_chunk(ed, pos_arr, s_arr, kinds, states, {}, clear_terrain, stats)
+                    _fill_foundations(world, found, stats)
+                    continue
+            world.skipped_chunks[k] = "chunk non generato"
+            stats["skipped_missing"] += sum(1 for s in s_arr if kinds[s] == _K_BLOCK)
+            continue
+        job = jobs.setdefault(len(jobs) if not jobs or len(jobs[len(jobs) - 1]["chunks"]) >= batch
+                              else len(jobs) - 1, {
+            "kinds": kinds, "states": plain_states, "clear_terrain": clear_terrain, "item": item_spec,
+            "ox": ox, "oy": oy, "oz": oz, "base_layer": base_layer, "chunks": []})
+        cols = "worker" if cols_by_chunk is None else cols_by_chunk.get(k, [])
+        job["chunks"].append((k, (raw[0], raw[1]), pos_arr, s_arr, cols, data_by_chunk.get(k, [])))
+    total = sum(len(j["chunks"]) for j in jobs.values())
+    log(f"  {total} chunk in {len(jobs)} gruppi, {_workers()} processi in parallelo...")
+    done = 0
+    with ProcessPoolExecutor(max_workers=_workers()) as pool:
+        for job, (out, versions, st) in zip(jobs.values(), pool.map(_region_job, jobs.values())):
+            for (cx, cz), (compression, payload) in out.items():
+                region = world.region(cx >> 5, cz >> 5)
+                region.store_raw((cx & 31, cz & 31), compression, payload)
+                world._stored_regions.add(region)
+            world._versions.update(versions)
+            for key, v in st.items():
+                if key == "errors":
+                    for msg in v:
+                        log(f"Avviso: {msg}")
+                elif key == "skipped":
+                    for k, reason in v:
+                        world.skipped_chunks[k] = reason
+                else:
+                    stats[key] = stats.get(key, 0) + v
+            done += len(job["chunks"])
+            log(f"  {done} chunk su {total}...")
+
+
 def inject_structures(world, placements, fill_foundations=True, clear_terrain=True,
-                      skip_modded=True, log=None, blend=False):
+                      skip_modded=True, log=None, blend=False, parallel=True):
     """
     Places the structures in the world (in memory). Call world.save() afterwards.
-    Each placement: {"structure", "world_x", "world_z", "y_coord", "name"}.
+    Each placement: {"structure", "world_x", "world_z", "y_coord", "name"}, optionally "terrain"
+    ("natural", "blend", "none") and "water_mode" ("island", "float").
+    blend: the default terrain around the structures: "natural" reshapes the land (hill, stairs,
+    island: see landscape.py), True only adds a short earth slope, False leaves it as it is.
+    Big structures are placed chunk by chunk (and region by region in parallel processes).
     Returns a stats dict.
     """
+    import landscape
     log = log or (lambda msg: None)
-    stats = {"placed": 0, "cleared": 0, "foundation": 0, "skipped_missing": 0,
-             "skipped_modded": 0, "skipped_height": 0, "destroyed": 0, "blend": 0,
-             "block_data": 0, "entities": 0}
-
-    stats["path"] = 0
-    stats["demolished"] = 0
-    batch_columns = set()
-    if blend:
-        for it in placements:
-            st = it.get("structure")
-            if st is not None:
-                bx0, bz0 = it["world_x"], it["world_z"]
-                batch_columns.update((bx0 + bx, bz0 + bz) for (bx, _, bz) in st.blocks)
+    stats = _new_stats()
+    boxes = [(it["world_x"], it["world_z"], it["world_x"] + it["structure"].width,
+              it["world_z"] + it["structure"].length) for it in placements if it.get("structure") is not None]
     for item in placements:
         if item.get("kind") == "path":
             stats["path"] += paint_path(world, item.get("cells", ()), item.get("block", "minecraft:dirt_path"))
@@ -412,116 +914,33 @@ def inject_structures(world, placements, fill_foundations=True, clear_terrain=Tr
         struct = item["structure"]
         ox, oy, oz = item["world_x"], item["y_coord"], item["world_z"]
         log(f"Iniezione {item['name']} a X: {ox}, Y: {oy}, Z: {oz}...")
-
-        # Lowest solid block of each column and of the whole structure
-        columns_bottom = {}
-        for (bx, by, bz), block in struct.blocks.items():
-            if block.get("Name", "minecraft:air") not in AIR_NAMES:
-                if by < columns_bottom.get((bx, bz), 1 << 30):
-                    columns_bottom[(bx, bz)] = by
-        base_layer = min(columns_bottom.values()) if columns_bottom else 0
-
-        # Foundations first: the ground scan must see the terrain before the structure is placed
-        foundation_cols = []
-        if fill_foundations:
-            for (bx, bz), by in columns_bottom.items():
-                # Only columns resting on the structure's lowest layer: arches, bridges
-                # and overhangs keep the empty space below them.
-                pillar_cols = item.get("pillar_columns")
-                if pillar_cols is not None:
-                    if (bx, bz) not in pillar_cols:
-                        continue  # e.g. under the arches of a bridge
-                elif by != base_layer and not item.get("pillars"):
-                    continue
-                gx, gz = ox + bx, oz + bz
-                base_y = oy + by
-                ground = world.ground_y(gx, gz, base_y - 1)
-                if ground is None or ground >= base_y - 1:
-                    continue
-                pillars = item.get("extend_columns") or item.get("pillars") or pillar_cols is not None
-                # A big gap means the structure floats on purpose (sky builds, high placements):
-                # only small gaps are filled. Structures resting on water (boats, docks) are not
-                # propped up either; bridge piers always go down to the bottom.
-                if base_y - 1 - ground > (MAX_PILLAR_DEPTH if pillars else MAX_FOUNDATION_GAP):
-                    continue
-                below = world.get_block_name(gx, base_y - 1, gz) or ""
-                if not pillars and ("water" in below or "lava" in below):
-                    continue
-                if pillars:
-                    # Bridges and towers: the pillar itself continues down to the ground
-                    bottom = struct.blocks[(bx, by, bz)]
-                    if not _is_pillar_block(bottom.get("Name", "")):
-                        continue        # stairs, banners, levers... hanging under an overhang
-                    fill = (bottom, bottom)
-                else:
-                    surface = world.get_block_name(gx, ground, gz) or "minecraft:grass_block"
-                    fill = tuple({"Name": n} for n in surface_fill_blocks(surface))
-                foundation_cols.append((gx, gz, ground, base_y, fill))
-
-        state_cache = {}
-        for (bx, by, bz), block in struct.blocks.items():
-            name = block.get("Name", "minecraft:air")
-            gx, gy, gz = ox + bx, oy + by, oz + bz
-            if name in AIR_NAMES:
-                if not clear_terrain:
-                    continue
-                current = world.get_block_name(gx, gy, gz)
-                if current is None or current in AIR_NAMES:
-                    continue
-                if world.set_block(gx, gy, gz, AIR_STATE):
-                    stats["cleared"] += 1
-                    if not current.endswith(("water", "lava")):
-                        stats["destroyed"] += 1
-                continue
-            if skip_modded and not name.startswith("minecraft:"):
-                stats["skipped_modded"] += 1
-                continue
-            editor = world.editor(gx >> 4, gz >> 4)
-            version = editor.data_version if editor is not None else 0
-            bk = (id(block), version)       # blocks of a structure share one dict per palette entry
-            cached = state_cache.get(bk)
-            if cached is None:
-                state = to_state(upgrade_block(block, version))
-                cached = state_cache[bk] = (state, block_key(state))
-            state, state_key = cached
-            if editor is None:
-                stats["skipped_missing"] += 1
-                continue
-            current = editor.get_block(gx & 15, gy, gz & 15)
-            current_name = str(current.get("Name", "minecraft:air")) if current is not None else "minecraft:air"
-            if world.set_block(gx, gy, gz, state, state_key):
-                stats["placed"] += 1
-                if current_name not in AIR_NAMES and not current_name.endswith(("water", "lava"))                         and current_name != state["Name"]:
-                    stats["destroyed"] += 1
+        terrain = item.get("terrain") or (blend if blend in ("natural", "blend", "none")
+                                          else "blend" if blend else "none")
+        special = item.get("extend_columns") or item.get("pillars") or item.get("pillar_columns") is not None \
+            or not item.get("blend", True)
+        site = low = None
+        if terrain == "natural" and not special:
+            low = landscape.footprint_of(struct)
+            if low:
+                site = landscape.survey(world, ox, oz, struct, oy, low)
             else:
-                stats["skipped_height"] += 1
-
-        for (bx, by, bz), data in getattr(struct, "block_nbt", {}).items():
-            if struct.blocks.get((bx, by, bz), {}).get("Name", "minecraft:air") not in AIR_NAMES:
-                if world.set_block_data(ox + bx, oy + by, oz + bz, data):
-                    stats["block_data"] += 1
-        for ent in getattr(struct, "entities", ()):
-            ex, ey, ez = ent["pos"]
-            if world.add_entity(ent["nbt"], ox + ex, oy + ey, oz + ez, ent.get("yaw", 0.0)):
-                stats["entities"] += 1
-
-        for gx, gz, ground, base_y, (surf_block, sub_block) in foundation_cols:
-            surf, sub = to_state(surf_block), to_state(sub_block)
-            for y in range(ground + 1, base_y):
-                if world.set_block(gx, y, gz, surf if y == base_y - 1 else sub):
-                    stats["foundation"] += 1
-
-        if blend and item.get("blend", True) and not item.get("extend_columns")                 and struct.width >= 3 and struct.length >= 3 and columns_bottom:
+                terrain = "blend"            # very large structures: the plain earth slope
+        base_layer, has_blocks = _inject_structure(world, item, clear_terrain, skip_modded,
+                                                   fill_foundations and site is None, stats, log, parallel)
+        if site is not None and has_blocks:
+            landscape.shape(world, item, site, low, stats, log)
+            continue
+        if terrain == "blend" and not special \
+                and struct.width >= 3 and struct.length >= 3 and has_blocks:
             stats["blend"] += blend_terrain(world, ox, oz, struct.width, struct.length, oy + base_layer - 1,
-                                            skip=batch_columns)
-
+                                            skip_boxes=boxes)
     return stats
 
 
 BLEND_MARGIN = 3
 
 
-def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGIN, skip=()):
+def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGIN, skip_boxes=()):
     """
     Gentle earth slope around a building: natural ground lower than the building's
     ground level is raised gradually over 'margin' blocks. Only adds blocks on natural
@@ -532,8 +951,10 @@ def blend_terrain(world, ox, oz, width, length, floor_ground, margin=BLEND_MARGI
     added = 0
     for x in range(ox - margin, ox + width + margin):
         for z in range(oz - margin, oz + length + margin):
-            if ox <= x < ox + width and oz <= z < oz + length or (x, z) in skip:
+            if ox <= x < ox + width and oz <= z < oz + length:
                 continue
+            if any(x1 <= x < x2 and z1 <= z < z2 for x1, z1, x2, z2 in skip_boxes):
+                continue            # another structure of the same injection: never refill its digging
             d = max(ox - x, x - (ox + width - 1), oz - z, z - (oz + length - 1))
             top = world.surface_y(x, z)
             if top is None:

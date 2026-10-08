@@ -422,8 +422,11 @@ class AnalogSim:
     Iterates (dust relaxation, comparators, torches) until nothing changes; raises on oscillation.
     """
 
-    def __init__(self, cells, contents=None, daylight=None, levers=None):
+    def __init__(self, cells, contents=None, daylight=None, levers=None, firing=None):
+        """firing: observers sending their pulse right now (the steady state during the pulse)."""
         self.cells = {p: (_short(n), dict(pr)) for p, (n, pr) in cells.items()}
+        self.firing = set(firing or ())
+        self.rep = {p: False for p, (n, _) in self.cells.items() if n == "repeater"}
         self.contents = {p: list(v) for p, v in (contents or {}).items()}
         self.daylight = dict(daylight or {})
         self.levers = {p: pr.get("powered") == "true" for p, (n, pr) in self.cells.items() if n == "lever"}
@@ -461,6 +464,19 @@ class AnalogSim:
         dx, dz = DIRS[OPP[pr["facing"]]]
         return (lv[0] + dx, lv[1], lv[2] + dz)
 
+    def observer_out(self, o):
+        """Cell an observer pulses into: the side opposite to its face."""
+        f = self.props(o).get("facing", "north")
+        d = {"up": (0, 1, 0), "down": (0, -1, 0), "north": (0, 0, -1), "south": (0, 0, 1),
+             "east": (1, 0, 0), "west": (-1, 0, 0)}[f]
+        return (o[0] - d[0], o[1] - d[1], o[2] - d[2])
+
+    def observer_watches(self, o):
+        f = self.props(o).get("facing", "north")
+        d = {"up": (0, 1, 0), "down": (0, -1, 0), "north": (0, 0, -1), "south": (0, 0, 1),
+             "east": (1, 0, 0), "west": (-1, 0, 0)}[f]
+        return (o[0] + d[0], o[1] + d[1], o[2] + d[2])
+
     def diode_out(self, p):
         """Cell a comparator outputs into (its 'facing' is the input side)."""
         dx, dz = DIRS[OPP[self.props(p)["facing"]]]
@@ -491,6 +507,10 @@ class AnalogSim:
                 best = 15                         # a torch strongly powers the block above it
             elif n == "comparator" and self.diode_out(q) == b:
                 best = max(best, self.comp[q])
+            elif n == "repeater" and self.rep.get(q) and self.diode_out(q) == b:
+                best = 15
+            elif n == "observer" and q in self.firing and self.observer_out(q) == b:
+                best = 15
         return best
 
     def weak(self, b):
@@ -518,6 +538,10 @@ class AnalogSim:
             return self.daylight.get(q, 0)
         if n == "comparator":
             return self.comp[q] if self.diode_out(q) == target else 0
+        if n == "repeater":
+            return 15 if self.rep.get(q) and self.diode_out(q) == target else 0
+        if n == "observer":
+            return 15 if q in self.firing and self.observer_out(q) == target else 0
         return 0
 
     def component_power(self, c, exclude=None):
@@ -544,6 +568,17 @@ class AnalogSim:
 
     def hopper_locked(self, p):
         return self.component_power(p) > 0
+
+    def dispenser_on(self, p):
+        """Dispensers and droppers fire like pistons (quasi-connectivity included)."""
+        return self.piston_on(p)
+
+    def repeater_input(self, r):
+        dx, dz = DIRS[self.props(r)["facing"]]
+        q = (r[0] + dx, r[1], r[2] + dz)
+        if q in self.dust:
+            return self.dust[q]
+        return max(self.source_into(q, r), self.block_power(q) if self.conductor(q) else 0)
 
     # ---- relaxation ----
     def _dust_sources(self, d):
@@ -619,6 +654,11 @@ class AnalogSim:
                 if out != self.comp[c]:
                     self.comp[c] = out
                     changed = True
+            for r in self.rep:
+                on = self.repeater_input(r) > 0
+                if on != self.rep[r]:
+                    self.rep[r] = on
+                    changed = True
             for t in self.torch:
                 lit = self.block_power(self.torch_attached(t)) == 0
                 if lit != self.torch[t]:
@@ -626,7 +666,8 @@ class AnalogSim:
                     changed = True
             if not changed:
                 return self
-            state = (tuple(sorted(self.torch.items())), tuple(sorted(self.comp.items())))
+            state = (tuple(sorted(self.torch.items())), tuple(sorted(self.comp.items())),
+                     tuple(sorted(self.rep.items())))
             if state in seen:
                 raise RuntimeError("il circuito oscilla (clock non previsto)")
             seen.append(state)

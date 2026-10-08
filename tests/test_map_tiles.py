@@ -81,6 +81,53 @@ class MapTilesTest(unittest.TestCase):
         os.utime(self.path, (later, later))
         self.assertIsNone(cache.load(0, 0, self.path))
 
+    def test_stale_cache_is_still_available(self):
+        cache = mt.TileCache(self.region_dir, root=os.path.join(self.tmp, "cache"))
+        cache.save(0, 0, self.path, mt.build_tile(self.path))
+        later = time.time() + 10
+        os.utime(self.path, (later, later))
+        self.assertIsNone(cache.load(0, 0, self.path))
+        tile, stamp = cache.load_any(0, 0)            # shown at once while the region is redrawn
+        self.assertIsNotNone(tile)
+        self.assertEqual(len(tile["image"]), mt.TILE * mt.TILE * 4)
+        self.assertNotEqual(stamp, mt.TileCache._stamp(self.path))
+
+    def test_incremental_redraw_reads_only_changed_chunks(self):
+        root = os.path.join(self.tmp, "cache")
+        mt.render_job(self.path, 0, 0, self.region_dir, True, root)
+        # the game saves chunk (1, 0) again, with a new block on top
+        region = MCARegion(self.path)
+        chunk, ts = region.chunks[(1, 0)]
+        ed = ChunkEditor(chunk, 1, 0)
+        ed.set_block(3, GROUND_Y + 1, 3, {"Name": "minecraft:gold_block"})
+        ed.flush()
+        region.chunks[(1, 0)] = (chunk, ts + 5)
+        region.save()
+        reads = []
+        orig = mt._render_chunk
+        mt._render_chunk = lambda r, k, d: (reads.append(k), orig(r, k, d))[1]
+        try:
+            again = mt.render_job(self.path, 0, 0, self.region_dir, True, root)
+        finally:
+            mt._render_chunk = orig
+        self.assertEqual(reads, [(1, 0)])
+        full = mt.build_tile(self.path)
+        self.assertEqual(again["heights"], full["heights"])
+        self.assertEqual(again["image"], mt.shade(full))
+        self.assertEqual(full["heights"][3 * mt.TILE + 16 + 3], GROUND_Y + 1)
+        self.assertEqual(again["structures"], full["structures"])
+
+    def test_old_palette_encoding_draws_the_same(self):
+        other = os.path.join(self.tmp, "old")
+        make_region(other, 0, 0, chunks=[(0, 0), (1, 0)], new_encoding=False)
+        new_dir = os.path.join(self.tmp, "new")
+        make_region(new_dir, 0, 0, chunks=[(0, 0), (1, 0)], new_encoding=True)
+        a = mt.build_tile(os.path.join(other, "r.0.0.mca"))
+        b = mt.build_tile(os.path.join(new_dir, "r.0.0.mca"))
+        self.assertEqual(a["rgb"], b["rgb"])
+        self.assertEqual(a["heights"], b["heights"])
+        self.assertEqual(self.px(a, 1, 1)[1], mt.surface_rgb("minecraft:grass_block"))
+
     def test_list_regions_and_labels(self):
         self.assertEqual(list(mt.list_regions(self.region_dir)), [(0, 0)])
         self.assertEqual(mt.region_coords("r.-3.12.mca"), (-3, 12))

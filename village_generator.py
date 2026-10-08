@@ -166,14 +166,17 @@ def generate_village(center, style, size, terrain, load, seed=None):
 
     # Strade
     road = set()
+    arm_len = {}
     for arm in ORDER:
         dx, dz = DIR[arm]
+        arm_len[arm] = r0
         for t in range(r0, road_len + 1):
             cells = [(cx + dx * t + (o if dz else 0), cz + dz * t + (o if dx else 0))
                      for o in range(-ROAD_HALF, ROAD_HALF + 1)]
             if any(terrain.height(x, z) is None or terrain.is_water(x, z) for x, z in cells):
                 break                        # the arm stops at the river: no road (and houses) beyond it
             road.update(cells)
+            arm_len[arm] = t
     plan.paths |= road
     plan.reserved |= road
 
@@ -197,7 +200,7 @@ def generate_village(center, style, size, terrain, load, seed=None):
             struct = rotate_to_face(base, target)
             best = None
             # try several positions along the road and keep the one that fits the land best
-            for t in range(t0, min(t0 + SLOT_SEARCH, road_len - 2)):
+            for t in range(t0, min(t0 + SLOT_SEARCH, arm_len[arm] - 2)):
                 rect, _ = _rect_for(arm, side, t, struct.width, struct.length, cx, cz)
                 if not plan.free(*rect):
                     continue
@@ -222,7 +225,7 @@ def generate_village(center, style, size, terrain, load, seed=None):
     # Lampioni ai lati delle strade
     for arm in ORDER:
         dx, dz = DIR[arm]
-        for t in range(r0 + 2, road_len, 8):
+        for t in range(r0 + 2, arm_len[arm], 8):
             x = cx + dx * t + (ROAD_HALF + 1 if dz else 0)
             z = cz + dz * t + (ROAD_HALF + 1 if dx else 0)
             if (x, z) not in plan.reserved and terrain.height(x, z) is not None and not terrain.is_water(x, z):

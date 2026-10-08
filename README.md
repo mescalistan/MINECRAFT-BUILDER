@@ -9,7 +9,9 @@
 - 🗺️ **Visualizzatore Mappa Anvil (.mca)**:
   - **Mappa estesa a tutto il mondo**: tutte le regioni vengono caricate in background (prima quelle vicine alla vista) e si può scorrere liberamente da una regione all'altra; *Tutto il mondo* rimpicciolisce fino a mostrarle tutte (zoom dal 4% al 3200%).
   - **Mappa dettagliata**: ogni pixel ha il colore del blocco in superficie (erba, sabbia, legno, tetti, strade, chiome degli alberi) con ombreggiatura del rilievo e acqua più scura dove è profonda: case, villaggi e costruzioni si riconoscono a colpo d'occhio.
-  - **Memoria delle zone già viste**: le regioni disegnate restano in memoria e vengono salvate in una cache su disco (`%LOCALAPPDATA%\MinecraftBuilder\map_cache`), così riaprendo il programma compaiono subito; una regione viene ridisegnata solo se il suo file è cambiato (ad esempio dopo un'iniezione).
+  - **Memoria delle zone già viste**: le regioni disegnate vengono salvate in una cache su disco (`%LOCALAPPDATA%\MinecraftBuilder\map_cache`) insieme all'immagine finale, così riaprendo un mondo già visto la mappa compare in meno di un secondo. Se nel frattempo il gioco (o un'iniezione) ha cambiato una regione, la vecchia immagine compare subito e vengono riletti solo i chunk cambiati.
+  - **Mondi estesi**: la prima apertura mostra prima una mappa rapida delle altezze di tutte le regioni richieste, poi i colori; quando la mappa è molto rimpicciolita usa copie ridotte delle regioni, così anche centinaia di regioni restano fluide.
+  - **Modalità Live** (pulsante *Live* sopra la mappa): mentre giochi la mappa segue il giocatore (opzione *Segui*), con una freccia nella direzione in cui guarda e la scia del percorso, e ridisegna le zone che il gioco salva. Minecraft scrive su disco posizione e terreno solo quando salva, cioè quando va in pausa o ogni 5 minuti circa: con la mappa su un altro schermo il gioco non va mai in pausa. Per questo, con *Posizione continua* (Windows), mentre stai giocando il programma preme per te F3+C ogni 2 secondi e legge le coordinate, poi rimette negli appunti quello che c'era; i tasti partono solo con Minecraft in primo piano e nessuna chat, cartello, libro o inventario aperti. Nella chat del gioco compare il messaggio di F3+C. Il terreno nuovo compare invece ai salvataggi del gioco.
   - **Strutture sulla mappa**: le strutture iniettate con il programma vengono registrate in `minecraft_builder.json` e disegnate con riquadro e nome, colorate per categoria (da lontano restano visibili come punti); villaggi, templi, portali e altre strutture generate dal gioco sono riquadrate in azzurro. Passando il mouse si vedono nome, coordinate e dimensioni; il menu *Vai a una struttura...* centra la mappa su ognuna.
   - Zoom incentrato sul cursore (rotellina o +/-), pan con trascinamento o frecce/WASD, griglia dei chunk e scala in blocchi.
   - HUD con coordinate globali, regione, chunk, altezza Y e strutture sotto il cursore.
@@ -24,6 +26,7 @@
   - **Integra con l'ambiente** (opzione): l'impalcato sale dolcemente da una sponda all'altra (un blocco ogni due), resta abbastanza alto sull'acqua da far passare le barche sotto gli archi, scavalca le colline invece di scavarle e usa i materiali del posto (arenaria nel deserto, arenaria rossa nelle badlands, mattoni di fango nelle paludi, pietra muschiosa nella giungla, il legno degli alberi vicini).
   - I piloni scendono fino al fondo del fiume; sulla terraferma il ponte diventa un terrapieno pieno fino al terreno, mentre sotto gli archi resta lo spazio vuoto.
   - Se il nuovo ponte parte vicino alla fine di un ponte esistente (in coda o costruito in precedenza, memorizzato nel mondo) lo prosegue senza interruzioni, nello stesso stile e alla stessa altezza dell'estremità.
+  - Il ponte sospeso resta piano e alto sull'acqua: alle due estremita' una rampa con mezzi blocchi scende fino alla sponda.
   - I ponti della libreria si possono allungare o accorciare mantenendo lo stile.
 - 🏰 **Mura difensive** (scheda *Mura*): cinque stili (pietra medievale, arenaria del deserto, ardesia nordica, pietra nera, palizzata di legno), altezza regolabile.
   - *Suggerisci il perimetro*: le mura vengono proposte intorno alle costruzioni vicine al giocatore (e alle strutture piazzate col programma), con un margine di 10 blocchi.
@@ -46,21 +49,26 @@
   - **Demolisci**: toglie l'opera e rimette il terreno esattamente com'era, perché al momento della costruzione vengono memorizzati i blocchi originali di ogni colonna toccata.
   - Anche modifiche e demolizioni si possono annullare con *Annulla ultima iniezione*.
 - 🏘️ **Generatore di villaggi** (scheda *Villaggio*): pianura, borgo medievale o nordico, in tre dimensioni. Crea piazza, strade a croce che seguono il terreno, edifici con la porta rivolta verso la strada, fattorie, sentieri e lampioni, evitando acqua, pendii e zone non generate.
-- ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura, **senza limiti di dimensione** (il ritaglio gira in background con l'avanzamento nel log: un'area di 400×400 con il terreno, 3 milioni di blocchi, si estrae in circa 10 secondi). In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno. Vengono copiati anche il contenuto di casse e barili, i testi dei cartelli, gli stendardi e le entità (cornici, armor stand, animali).
+- ✂️ **Ritagli** (scheda *Ritagli*): trascina un rettangolo sulla mappa per salvare una zona di un mondo come struttura, **senza limiti di dimensione** (il ritaglio gira in background con l'avanzamento nel log: un'area di 400×400 con il terreno, 3 milioni di blocchi, si estrae in circa 10 secondi). In modalità *Solo costruzioni* terreno, piante e alberi naturali non vengono copiati e viene memorizzata la quota d'appoggio, così incollandola su un'altra mappa si adatta al nuovo terreno (cantine comprese); in modalità *Tutto* viene copiato anche il terreno. Vengono copiati anche il contenuto di casse e barili, i testi dei cartelli, gli stendardi e le entità (cornici, armor stand, animali). Neve compatta, terracotta e ghiaccio sono anche il terreno di alcuni biomi e di solito restano fuori: un'opzione del ritaglio li tiene quando la costruzione e' fatta di questi blocchi (igloo, case di terracotta).
+  - **Dettagli completi anche nelle strutture grandi**: un blocco "naturale" viene tenuto quando fa parte della costruzione: terra, erba, fiori e colture appoggiati sopra la costruzione (giardini pensili, fioriere, campi su terra arata, sabbia sui tetti), soffitti di pietra, ghiaccio o glowstone sopra le stanze, rampicanti, licheni e cacao attaccati ai muri, canne da zucchero e bambù delle farm accanto a osservatori e pistoni. Glowstone, netherrack e gli altri blocchi del Nether e dell'End nell'Overworld sono sempre considerati costruiti (lampade, camini). Corretti anche barbabietole, gambi di zucca e melone e blocchi di corallo morto, che prima venivano scartati.
+  - **Terreno racchiuso dalla costruzione** (opzione, attiva di base): il prato di un cortile, il campo di uno stadio, l'aiuola di un giardino chiuso da mura o recinti vengono copiati con la costruzione (lo strato in superficie, con fiori e alberi); le aperture strette come porte e cancelli non contano come uscite. Il ritaglio dello stadio di Oshode City ora ha il campo da calcio, prima mancante; quello della RedstoneSmartHouse il giardino e non piu' i blocchi di arenaria del deserto.
 - 📍 **Rilevamento e Tracciamento Giocatore**:
   - Localizzazione automatica delle ultime coordinate del giocatore dai file di salvataggio (`level.dat`, `playerdata`, `players`).
   - Animazione radar circolare pulsante sul marker del giocatore.
   - Pulsante per centrare istantaneamente la visuale sulla regione del personaggio.
 - 🏗️ **Gestione e Posizionamento Strutture**:
-  - Libreria integrata di 80 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
+  - Libreria integrata di 103 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
   - Browser per cercare e scaricare schemi online.
   - Anteprima grafica top-down 2D dei blocchi reali con trasparenza per allineamento preciso.
-  - Rotazione a 90° oraria (`R`) e drag-and-drop con click-to-place.
+  - Rotazione a 90° oraria (`R`) e drag-and-drop con click-to-place: un clic posiziona la struttura, trascinando fuori dalla struttura si sposta la mappa, trascinando la struttura la si sposta.
   - Sistema di code a posizionamenti multipli (Staging) per iniettare più strutture contemporaneamente.
+  - **Strutture in coda modificabili sulla mappa**: un clic su una struttura in coda la seleziona (anche nell'elenco della coda); trascinandola si sposta e la sua altezza si riadatta al terreno, `R` la ruota sul posto, `Canc` la toglie, `Ctrl+D` ne mette in coda un'altra uguale accanto, `Esc` deseleziona; le stesse azioni sono nel menu del tasto destro. Maiusc+clic posiziona una nuova struttura anche sopra una gia' in coda. Mura, strade e ponti si cambiano con *Modifica* nelle loro schede.
 - 🌱 **Integrazione Intelligente col Terreno**:
   - **Adattamento Altezza**: Calcolo automatico della quota media dell'ingombro della struttura.
   - **Fondamenta Naturali**: Rilevamento del terreno reale sotto la struttura (erba/terra, sabbia/arenaria, neve, roccia) e riempimento dei vuoti sottostanti. Archi e ponti mantengono lo spazio vuoto sotto le campate.
   - **Scavo Terreno**: Rimozione automatica di ostacoli (terra, pietra, alberi) per i volumi interni d'aria.
+  - **Paesaggio naturale** (*Terreno intorno*, predefinito): se la struttura sta piu' in alto del terreno sale una collina dal bordo irregolare con i materiali del bioma letto dal mondo (erba, sabbia, neve, podzol, sabbia rossa, roccia dove e' ripido), con erba, fiori del bioma, massi e alberelli; dalle porte scende una **scalinata a tema** nel materiale della struttura (o del bioma), che segue il pendio con lanterne lungo il percorso. Su un pendio il terreno davanti alla struttura viene terrazzato. Sull'acqua nasce un'**isola**: cuore erboso, spiaggia di sabbia asciutta, fondale che scende dolcemente con alghe, canne da zucchero sulla riva e palme nei biomi caldi.
+  - **Barche e strutture sottomarine** (*Sull'acqua: Galleggia*): niente isola; la struttura sta immersa di quanti blocchi scegli (*Immersione*) e l'acqua rimasta dentro lo scafo sotto il pelo dell'acqua viene tolta. La scelta e l'immersione vengono ricordate per ogni struttura; navi e barche (categoria *Navi* o nomi come nave, barca, galeone, sottomarino) galleggiano gia' di base.
   - **Strutture a cavallo delle regioni**: i blocchi oltre il bordo del file `.mca` vengono scritti nelle regioni vicine.
   - **Rotazione completa**: oltre a `facing`/`axis` ruotano anche recinti, vetri, muretti, cartelli, stendardi e binari.
   - **Consiglio Posizione Ottimale**: Scanner euristico per individuare la zona più pianeggiante nelle vicinanze.
@@ -74,10 +82,16 @@
 - ⚡ **Architettura Asincrona & Sicurezza**:
   - Iniezione blocchi gestita in un thread dedicato in background (`QThread`) senza bloccare l'interfaccia utente.
   - Modifica per sezioni (ogni sezione 16×16×16 viene decodificata e ricodificata una sola volta): migliaia di volte più veloce dell'approccio blocco per blocco.
+  - **Ritagli enormi**:
+    - Le strutture con più di un milione di blocchi restano compatte in memoria (pochi byte per blocco invece di un oggetto per blocco).
+    - Si caricano e si salvano a flusso, senza mai tenere il file intero decompresso, e la rotazione è istantanea.
+    - Nel test sul ritaglio di New York (27 milioni di blocchi) il picco di memoria in lettura scende da 2 GB a circa 530 MB; il guadagno vale per i ritagli salvati dall'app da ora in poi.
+  - **Iniezione grande in parallelo**: i blocchi vengono divisi per chunk e i chunk elaborati da più processi in parallelo. Ogni chunk viene compresso appena finito, quindi il salvataggio finale è immediato. Nel test sul mondo di prova i 27 milioni di blocchi di New York si iniettano in circa 20 secondi; backup e *Annulla ultima iniezione* funzionano come sempre.
+  - Selezionando un ritaglio molto grande, caricamento e anteprima avvengono in background; l'anteprima resta in cache su disco e ruotarla non richiede ricalcoli.
   - Regioni caricate in modo lazy: la mappa legge solo le heightmap e il salvataggio riscrive solo i chunk modificati, copiando gli altri byte per byte.
   - Scrittura atomica e backup automatico di ogni file `.mca` modificato.
   - I blocchi che hanno bisogno di un'entità (rilevatori di luce, sensori sculk, casse, letti, cartelli...) ricevono un'entità vuota, così funzionano subito; i collegamenti della polvere di redstone vengono calcolati come fa il gioco.
-  - La mappa dettagliata viene disegnata in parallelo su più processi: la prima volta un mondo di 28 regioni richiede circa 18 secondi invece di un minuto, poi viene ripreso dalla cache.
+  - La mappa dettagliata viene disegnata in parallelo su più processi leggendo dei chunk solo palette, heightmap e strutture (il resto viene saltato): la prima volta 30 regioni grandi richiedono circa 7 secondi (prima 25), riaperte dalla cache mezzo secondo.
   - Luce e heightmap dei chunk modificati invalidate: Minecraft le ricalcola al caricamento.
   - I chunk non generati vengono saltati (mai creati vuoti) e i blocchi di mod vengono saltati nei mondi vanilla.
   - Compatibile con i mondi dalla 1.18 a Minecraft 26.x: legge e scrive sia il formato classico dei blocchi (`{Name, Properties}`) sia quello nuovo (stringhe e `{id, properties}`), e aggiorna i nomi dei blocchi rinominati (es. `chain` → `iron_chain`, `grass` → `short_grass`) in base alla versione del mondo.
@@ -128,6 +142,8 @@
 ├── main.py                 # Finestra principale, controller GUI, worker thread asincrono
 ├── map_viewer.py           # Canvas interattivo della mappa multi-regione, overlay strutture e HUD
 ├── map_tiles.py            # Tessere della mappa (colori dei blocchi, strutture del gioco) e cache su disco
+├── landscape.py            # Terreno intorno alle strutture incollate: colline, scalinate, isole, barche
+├── game_link.py            # Modalità Live: finestra di Minecraft in primo piano e F3+C automatico (Windows)
 ├── mca_codec.py            # Parser e scrittore Anvil (.mca) lazy, ChunkEditor per sezioni, heightmap
 ├── world_editor.py         # Accesso al mondo in coordinate globali (multi-regione), iniezione, sentieri
 ├── world_locator.py        # Riconosce mondo/saves/dimensione da qualsiasi percorso
@@ -153,7 +169,7 @@
 └── requirements.txt        # Dipendenze Python
 ```
 
-### 🧱 Libreria di template vanilla (80 modelli)
+### 🧱 Libreria di template vanilla (103 modelli)
 
 Tutti generati da codice con `python tools/build_templates.py` (solo blocchi vanilla, DataVersion 3955 / MC 1.21.1), validati automaticamente per la giocabilità e testati con iniezione in un mondo. Il livello y=0 di ogni modello è il primo strato sopra il terreno.
 
@@ -296,6 +312,43 @@ Strutture più dettagliate aggiunte di recente (ispirate alle costruzioni più p
 |---|---|---|---|
 | Hub sotterraneo esagonale con magazzino | `underground_hub.nbt` | 39×38×57 (22 strati sotto terra) | Sala esagonale gotico-industriale con smistatore a 9 oggetti, ascensore a bolle, scala a chiocciola e chiosco in superficie. |
 | Fonderia del ferro (iron farm 1.21) | `iron_farm.nbt` | 18×29×18 | Iron farm compatta con villager e zombie inclusi, lama di lava, feritoia giorno/notte e leva di spegnimento. |
+
+#### ⚙️ Farm automatiche (23 modelli, `tools/templates/auto_farms.py`)
+
+Meccanismi classici che funzionano in sopravvivenza, ognuno in piu' taglie e stili (pietra, legno, moderno). La redstone di ogni farm e' verificata dai test con il simulatore di circuiti (`tests/test_auto_farms.py`): scattano i pistoni e i dispenser giusti, solo quando devono, senza oscillazioni; ogni catena di tramogge finisce in una cassa o in una fornace; le piante hanno acqua o terra bagnata, i cactus non toccano nulla.
+
+- **Canna da zucchero e bambu'**: l'osservatore guarda il terzo blocco della pianta e fa scattare il pistone sul secondo (non vede mai la testa del pistone: niente clock); il canale d'acqua e i carrelli tramoggia sotto la terra raccolgono anche i pezzi caduti sulla base. File da 8 (la corrente porta gli oggetti per 7 blocchi), moduli separati da una colonna piena cosi' ogni fila ha il suo circuito.
+- **Meloni e zucche**: l'osservatore guarda il gambo (cambia quando nasce il frutto e quando sparisce), i pistoni distruggono il frutto, i carrelli tramoggia sotto la terra lo raccolgono; una sorgente d'acqua ogni 8 blocchi tiene bagnata la terra arata.
+- **Lana**: una pecora per recinto su un blocco d'erba; quando la mangia (e la lana ricresce) l'osservatore fa scattare il dispenser con 9 cesoie; l'erba sotto il vetro tra i recinti fa ricrescere quella mangiata.
+- **Super fornace, altoforno, cucina**: linee di tramogge distribuiscono materiali e combustibile su ogni fornace e raccolgono i prodotti in una cassa.
+- **Lava**: spuntoni di dripstone sotto una vasca di lava riempiono da soli i calderoni.
+- **Cactus**: a scacchiera sulla sabbia sopra un pavimento di tramogge, si spezzano crescendo contro una staccionata.
+
+| Modello | File | Dimensioni (X×Y×Z) | Descrizione |
+|---|---|---|---|
+| Farm automatica di canna da zucchero (16 piante) | `auto_sugar_cane_farm.nbt` | 12×7×7 | 2 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di bambu' (16 piante) | `auto_bamboo_farm.nbt` | 12×7×7 | 2 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di canna da zucchero (48 piante) | `auto_sugar_cane_farm_grande.nbt` | 12×7×23 | 6 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di bambu' (48 piante) | `auto_bamboo_farm_grande.nbt` | 12×7×23 | 6 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di canna da zucchero (32 piante) | `auto_sugar_cane_farm_moderna.nbt` | 12×7×15 | 4 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di bambu' (32 piante) | `auto_bamboo_farm_moderna.nbt` | 12×7×15 | 4 file da 8: osservatori e pistoni rompono la pianta quando arriva al terzo blocco, canale d'acqua e carrelli tramoggia sotto la terra raccolgono tutto nella cassa. |
+| Farm automatica di meloni (8 gambi) | `auto_melon_farm.nbt` | 13×7×7 | 8 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di zucche (8 gambi) | `auto_pumpkin_farm.nbt` | 13×7×7 | 8 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di meloni (22 gambi) | `auto_melon_farm_grande.nbt` | 17×7×13 | 22 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di zucche (22 gambi) | `auto_pumpkin_farm_grande.nbt` | 17×7×13 | 22 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di meloni (16 gambi) | `auto_melon_farm_moderna.nbt` | 13×7×13 | 16 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di zucche (16 gambi) | `auto_pumpkin_farm_moderna.nbt` | 13×7×13 | 16 gambi con un posto per il frutto da ogni lato: l'osservatore sopra il gambo fa scattare i pistoni appena cresce un frutto, i carrelli tramoggia sotto la terra lo raccolgono e lo portano nella cassa. |
+| Farm automatica di lana bianca (8 pecore) | `auto_wool_farm.nbt` | 19×6×5 | 8 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa. |
+| Farm automatica di lana colorata (16 pecore) | `auto_wool_farm_colori.nbt` | 35×6×5 | 16 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa. |
+| Farm automatica di lana (24 pecore) | `auto_wool_farm_grande.nbt` | 51×6×5 | 24 pecore, ognuna nel suo recinto su un blocco d'erba: quando la mangia (e la lana ricresce) l'osservatore fa scattare un dispenser con le cesoie; i carrelli tramoggia sotto l'erba portano la lana nella cassa. |
+| Super fornace automatica (8 fornaci) | `auto_super_smelter.nbt` | 11×6×4 | Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 8 fornaci e raccolgono tutto il prodotto nella cassa in fondo. |
+| Super fornace automatica (16 fornaci) | `auto_super_smelter_grande.nbt` | 19×6×4 | Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 16 fornaci e raccolgono tutto il prodotto nella cassa in fondo. |
+| Altoforno automatico (8 altoforni, minerali) | `auto_blast_smelter.nbt` | 11×6×4 | Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 8 blocchi e raccolgono tutto il prodotto nella cassa in fondo. |
+| Cucina automatica (6 affumicatori, cibo) | `auto_smoker_kitchen.nbt` | 9×6×4 | Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 6 blocchi e raccolgono tutto il prodotto nella cassa in fondo. |
+| Farm di lava (9 calderoni) | `auto_lava_farm.nbt` | 9×6×9 | 9 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio. |
+| Farm di lava (25 calderoni) | `auto_lava_farm_grande.nbt` | 13×6×13 | 25 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio. |
+| Farm di cactus (25 cactus) | `auto_cactus_farm.nbt` | 10×5×10 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
+| Farm di cactus (61 cactus) | `auto_cactus_farm_grande.nbt` | 14×5×14 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
 
 Dettagli e prove in gioco: [docs/HUB_E_IRON_FARM.md](docs/HUB_E_IRON_FARM.md). Il prompt di progetto per i prossimi moduli è in [docs/PROMPT_ARCHITETTO.md](docs/PROMPT_ARCHITETTO.md).
 

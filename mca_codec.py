@@ -7,6 +7,7 @@ import time
 import shutil
 from collections.abc import MutableMapping
 
+from nbt_codec import parse_root_skipping
 from nbt_codec import (
     parse_nbt_bytes, nbt_to_bytes, TAG_Compound, TAG_List, TAG_Byte, TAG_Int,
     TAG_Long_Array, TAG_String,
@@ -111,6 +112,9 @@ class MCARegion:
         self.dirty = set()   # chunks to re-encode on save
         self.timestamps = [0] * 1024
         self.chunks = _ChunkMap(self)
+        # read-only views (map tiles) can leave out the top-level chunk tags they never use.
+        # NEVER set it on a region that is going to be saved: those tags would be lost.
+        self.skip_tags = None
         self.load()
 
     # ---- reading ----
@@ -119,6 +123,7 @@ class MCARegion:
         # (GUI thread) never sees a half-loaded region while a save reloads it.
         raw = {}
         timestamps = [0] * 1024
+        offsets = [0] * 1024
         if os.path.exists(self.file_path):
             with open(self.file_path, 'rb') as f:
                 data = f.read()
@@ -142,8 +147,10 @@ class MCARegion:
 
         self._raw = raw
         self.timestamps = timestamps
+        self.header_offsets = list(offsets)   # sector offset << 8 | sector count, as in the file header
         self._bad = set()
         self.dirty = set()
+        self._stored = set()       # chunks re-encoded in memory (store_raw), written on save
         self.chunks.clear_cache()
 
     def _external_path(self, cx, cz):
@@ -151,19 +158,24 @@ class MCARegion:
         gz = self.rz * 32 + cz
         return os.path.join(os.path.dirname(self.file_path), f"c.{gx}.{gz}.mcc")
 
-    def _decode(self, key):
+    def chunk_bytes(self, key):
+        """Uncompressed NBT bytes of a chunk (KeyError if absent)."""
         compression, payload, external = self._raw[key]
         if external:
             with open(self._external_path(*key), 'rb') as f:
                 payload = f.read()
         if compression == 1:
-            data = gzip.decompress(payload)
-        elif compression == 2:
-            data = zlib.decompress(payload)
-        elif compression == 3:
-            data = payload
-        else:
-            raise ValueError(f"Unsupported chunk compression {compression}")
+            return gzip.decompress(payload)
+        if compression == 2:
+            return zlib.decompress(payload)
+        if compression == 3:
+            return payload
+        raise ValueError(f"Unsupported chunk compression {compression}")
+
+    def _decode(self, key):
+        data = self.chunk_bytes(key)
+        if self.skip_tags:
+            return parse_root_skipping(data, self.skip_tags)
         nbt, _ = parse_nbt_bytes(data)
         return nbt
 
@@ -199,6 +211,17 @@ class MCARegion:
         min_y = struct.unpack_from('>i', data, ypos + len(_YPOS_TAG))[0] * 16
         return [v + min_y - 1 for v in decode_indices(longs, 9, 256)]
 
+    def store_raw(self, key, compression, payload):
+        """Replaces a chunk with an already compressed payload (written by save, decoded again if read)."""
+        self._raw[key] = (compression, payload, False)
+        self.chunks._decoded.pop(key, None)
+        self.dirty.discard(key)
+        self._bad.discard(key)
+        self._stored.add(key)
+
+    def store_chunk(self, key, nbt):
+        self.store_raw(key, 2, zlib.compress(nbt_to_bytes(nbt, "")))
+
     def mark_dirty(self, key):
         if key in self.chunks:
             self.dirty.add(key)
@@ -220,6 +243,8 @@ class MCARegion:
         return None
 
     def save(self, dest_path=None):
+        if self.skip_tags:
+            raise RuntimeError("Regione aperta in sola lettura (tag saltati): non si puo' salvare")
         if dest_path is None:
             dest_path = self.file_path
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
@@ -243,6 +268,8 @@ class MCARegion:
                 elif key in self._raw:
                     # Untouched chunk: copy the original compressed bytes as they are
                     compression, payload, external = self._raw[key]
+                    if key in self._stored:
+                        new_timestamps[idx] = now
                 else:
                     new_timestamps[idx] = 0
                     continue
@@ -570,7 +597,7 @@ class ChunkEditor:
         self.data_version = int(chunk_nbt.get("DataVersion", 0) or 0)
         self._cache = {}       # sy -> [palette, indices, key->index]
         self._dirty_secs = set()
-        self.changed = set()   # absolute (x, y, z) of changed blocks
+        self._changed = {}     # sy -> set of section-local positions of changed blocks
         self.block_data = {}   # absolute (x, y, z) -> block entity tags to merge in on flush
 
     def _load(self, sy):
@@ -608,8 +635,15 @@ class ChunkEditor:
         if indices[pos] != p:
             indices[pos] = p
             self._dirty_secs.add(sy)
-            self.changed.add((self.chunk_x * 16 + x, y, self.chunk_z * 16 + z))
+            self._changed.setdefault(sy, set()).add(pos)
         return True
+
+    @property
+    def changed(self):
+        """Absolute (x, y, z) of the changed blocks (built on request)."""
+        bx, bz = self.chunk_x * 16, self.chunk_z * 16
+        return {(bx + (p & 15), sy * 16 + (p >> 8), bz + ((p >> 4) & 15))
+                for sy, ps in self._changed.items() for p in ps}
 
     @property
     def dirty(self):
@@ -634,14 +668,28 @@ class ChunkEditor:
         # Remove block entities (chest contents, signs...) of overwritten blocks, and add an empty
         # one for the new blocks that need it (detectors and sensors would not tick without it)
         be_list = self.nbt.get("block_entities") or []
-        kept = [be for be in be_list
-                if (int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))) not in self.changed]
-        for (x, y, z) in self.changed:
-            state = self.get_block(x - self.chunk_x * 16, y, z - self.chunk_z * 16)
-            be_id = block_entity_id(str(state.get("Name", ""))) if state is not None else None
-            if be_id:
-                kept.append(TAG_Compound({"id": TAG_String(be_id), "x": TAG_Int(x), "y": TAG_Int(y),
-                                          "z": TAG_Int(z), "keepPacked": TAG_Byte(0)}))
+        changed = self._changed
+
+        def overwritten(be):
+            y = int(be.get("y", 0))
+            ps = changed.get(y >> 4)
+            return ps is not None and (((y & 15) << 8) | ((int(be.get("z", 0)) & 15) << 4)
+                                       | (int(be.get("x", 0)) & 15)) in ps
+        kept = [be for be in be_list if not overwritten(be)] if changed else list(be_list)
+        bx, bz = self.chunk_x * 16, self.chunk_z * 16
+        for sy, ps in changed.items():
+            palette, indices, _ = self._cache[sy]
+            # palette entries that need a block entity, then only the changed positions using them
+            need = {i: be_id for i, be_id in ((i, block_entity_id(str(st.get("Name", ""))))
+                                              for i, st in enumerate(palette)) if be_id}
+            if not need:
+                continue
+            for p in ps:
+                be_id = need.get(indices[p])
+                if be_id:
+                    kept.append(TAG_Compound({"id": TAG_String(be_id), "x": TAG_Int(bx + (p & 15)),
+                                              "y": TAG_Int(sy * 16 + (p >> 8)), "z": TAG_Int(bz + ((p >> 4) & 15)),
+                                              "keepPacked": TAG_Byte(0)}))
         if self.block_data:
             by_pos = {(int(be.get("x", 0)), int(be.get("y", 0)), int(be.get("z", 0))): i
                       for i, be in enumerate(kept)}
@@ -667,7 +715,7 @@ class ChunkEditor:
         recalculate_heightmaps(self.nbt)
         self._dirty_secs.clear()
         self._cache.clear()
-        self.changed = set()        # a later flush must not reset the block entities written now
+        self._changed = {}          # a later flush must not reset the block entities written now
         return True
 
 

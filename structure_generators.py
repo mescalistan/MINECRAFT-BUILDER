@@ -230,6 +230,59 @@ def bridge_between(style, a, b, ground_a, ground_b, existing=(), water_level=Non
     }
 
 
+def end_ramp(axis, center, start, direction, deck, terrain, half=2, reach=40,
+             top="polished_andesite", fill="stone_bricks", slab="polished_andesite"):
+    """
+    Ramp from the end of a flat deck (deck block at Y 'deck') down or up to the bank: one block
+    per step with a slab on every step, from 'start' along the axis in 'direction' (+1/-1).
+    Returns a placement, or None when the deck is already level with the bank.
+    """
+    cells, slabs = {}, []
+    prev = deck
+    for k in range(reach):
+        p = start + direction * k
+        cols = [(p, center + o) if axis == "x" else (center + o, p) for o in range(-half, half + 1)]
+        hs = sorted(h for h in (terrain.height(x, z) for x, z in cols) if h is not None)
+        if not hs:
+            break
+        g = hs[len(hs) // 2]
+        if terrain.is_water(*cols[half]):
+            g = prev                     # still over the water: keep the level
+        lvl = max(min(g, prev + 1), prev - 1)
+        if lvl == g and lvl == prev and k > 0:
+            break                        # reached the bank
+        for x, z in cols:
+            cells[(x, z)] = lvl
+        if lvl < prev:                   # half step on the lower cell
+            slabs.extend((x, lvl + 1, z) for x, z in cols)
+        elif lvl > prev:
+            back = p - direction
+            slabs.extend(((back, prev + 1, center + o) if axis == "x" else (center + o, prev + 1, back))
+                         for o in range(-half, half + 1))
+        prev = lvl
+    if not cells or all(v == deck for v in cells.values()):
+        return None
+    xs = [x for x, _ in cells] + [s_[0] for s_ in slabs]
+    zs = [z for _, z in cells] + [s_[2] for s_ in slabs]
+    lows = [min(v, terrain.height(x, z) if terrain.height(x, z) is not None else v) for (x, z), v in cells.items()]
+    y0 = min(lows) - 1
+    y1 = max(cells.values()) + 5
+    x0, z0 = min(xs), min(zs)
+    b = Builder(max(xs) - x0 + 1, y1 - y0 + 1, max(zs) - z0 + 1)
+    for (x, z), lvl in cells.items():
+        g = terrain.height(x, z)
+        g = lvl if g is None else g
+        for y in range(min(g, lvl - 1) + 1, lvl):
+            b.set(x - x0, y - y0, z - z0, fill)
+        b.set(x - x0, lvl - y0, z - z0, top)
+        for y in range(lvl + 1, max(lvl + 3, g) + 1):
+            b.set(x - x0, y - y0, z - z0, AIR)
+    for x, y, z in slabs:
+        b.slab(x - x0, y - y0, z - z0, slab)
+    return {"structure": b.to_structure(), "world_x": x0, "world_z": z0, "y_coord": y0,
+            "name": "Rampa del ponte", "extend_columns": True}
+
+
 def lamp_post(wood="spruce"):
     b = Builder(1, 3, 1)
     b.fill(0, 0, 0, 0, 1, 0, f"{wood}_fence")
@@ -560,6 +613,10 @@ def plan_bridge(style, a, b, terrain, existing=(), integrate=False, world=None):
                 wet.append(terrain.height(x, z))
         plan = bridge_between(style, a, b, ha, hb, existing, water_level=(max(wet) + 3) if wet else None)
         plan["bridge"]["integrate"] = False
+        info = plan["bridge"]
+        plan["ramps"] = [r for r in (end_ramp(info["axis"], info["center"], info["a"] - 1, -1, info["deck"], terrain),
+                                     end_ramp(info["axis"], info["center"], info["b"] + 1, 1, info["deck"], terrain))
+                         if r is not None]
         return plan
     kind = "wood" if style == "wood" else "stone"
     palette, wood = ("nether" if style == "nether" else "stone"), "spruce"

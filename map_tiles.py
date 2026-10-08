@@ -15,18 +15,20 @@ import hashlib
 import json
 import os
 import re
+import struct
 import sys
 import zlib
 
 from mca_codec import (MCARegion, normalize_state, read_world_surface, surface_heights, chunk_min_y,
                        chunk_is_full, _palette_bits)
+from nbt_codec import _read_string, _read_payload, skip_payload
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
 import blockinfo  # noqa: E402
 
 TILE = 512
 NO_DATA = -32768          # height of columns in chunks that have not been generated
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 _REGION_RE = re.compile(r"^r\.(-?\d+)\.(-?\d+)\.mca$")
 
 # Blocks seen "through" when colouring the map (the ground below them is coloured instead)
@@ -37,7 +39,7 @@ _SEE_THROUGH = ("short_grass", "tall_grass", "fern", "large_fern", "dead_bush", 
                 "pink_petals", "wildflowers", "leaf_litter", "bush", "firefly_bush", "short_dry_grass",
                 "tall_dry_grass", "redstone_wire", "string", "tripwire", "candle",
                 "lever", "ladder", "end_rod", "lightning_rod", "chain", "cobweb")
-_WATERY = ("water", "bubble_column", "seagrass", "kelp")
+_WATERY = ("water", "bubble_column", "seagrass", "kelp", "sea_pickle")
 
 
 def region_coords(filename):
@@ -117,8 +119,9 @@ def block_kind(name):
     k = _kind_cache.get(name)
     if k is None:
         short = name.split(":", 1)[-1]
-        if any(w in short for w in _WATERY):
-            k = WATER
+        if any(w in short for w in _WATERY) or ("coral" in short and not short.startswith("dead_")
+                                                 and not short.endswith("_block")):
+            k = WATER           # live corals only grow under water: the map shows the sea bed below
         elif short in AIR_SHORT or any(t in short for t in _SEE_THROUGH):
             k = SEE_THROUGH
         else:
@@ -240,7 +243,319 @@ def _column_heights(region, key, chunk=None):
     return h, chunk
 
 
-def build_tile(path, detailed=True, cancelled=lambda: False):
+TILE_SKIP_TAGS = frozenset(("block_ticks", "fluid_ticks", "PostProcessing", "block_entities", "blending_data",
+                            "Lights", "CarvingMasks", "entities", "UpgradeData", "Entities", "TileEntities",
+                            "TileTicks", "LiquidTicks"))
+
+
+# ---------------------------------------------------------------------------
+# Light chunk reading: only the tags the map draws are decoded, everything else is skipped
+# ---------------------------------------------------------------------------
+
+_SEC_Y = struct.Struct(">b")
+_INT = struct.Struct(">i")
+
+
+def _skip_compound(buf, pos):
+    """Position after a compound payload; primitive tags are skipped inline (no call per tag)."""
+    while True:
+        t = buf[pos]
+        if t == 0:
+            return pos + 1
+        pos += 3 + ((buf[pos + 1] << 8) | buf[pos + 2])
+        if t == 3 or t == 5:
+            pos += 4
+        elif t == 8:
+            pos += 2 + ((buf[pos] << 8) | buf[pos + 1])
+        elif t == 1:
+            pos += 1
+        elif t == 4 or t == 6:
+            pos += 8
+        elif t == 2:
+            pos += 2
+        else:
+            pos = _skip(buf, pos, t)
+
+
+def _skip(buf, pos, t):
+    """Like nbt_codec.skip_payload, faster on the big lists of compounds (block_ticks...)."""
+    if t == 10:
+        return _skip_compound(buf, pos)
+    if t == 9 and buf[pos] == 10:
+        n = _INT.unpack_from(buf, pos + 1)[0]
+        pos += 5
+        for _ in range(max(0, n)):
+            pos = _skip_compound(buf, pos)
+        return pos
+    return skip_payload(buf, pos, t)
+
+
+def _long_array(buf, pos):
+    n = _INT.unpack_from(buf, pos)[0]
+    a = array.array("Q")
+    a.frombytes(buf[pos + 4:pos + 4 + 8 * n])
+    if sys.byteorder == "little":
+        a.byteswap()
+    return a, pos + 4 + 8 * n
+
+
+def _palette_names(buf, pos):
+    """Block ids of a block_states palette (any encoding: {Name}, {id}, {"": id}, plain strings)."""
+    it, n = buf[pos], _INT.unpack_from(buf, pos + 1)[0]
+    if it not in (8, 10):
+        return [], _skip(buf, pos, 9)
+    pos += 5
+    names = []
+    for _ in range(max(0, n)):
+        if it == 8:
+            s, pos = _read_string(buf, pos)
+            names.append(str(s))
+            continue
+        name = "minecraft:air"
+        while True:
+            t = buf[pos]
+            if t == 0:
+                pos += 1
+                break
+            key, pos = _read_string(buf, pos + 1)
+            if t == 8 and key in ("Name", "id", ""):
+                s, pos = _read_string(buf, pos)
+                name = str(s)
+            else:
+                pos = _skip(buf, pos, t)
+        names.append(name)
+    return names, pos
+
+
+def _light_section(buf, pos):
+    y = names = data = None
+    while True:
+        t = buf[pos]
+        if t == 0:
+            return (y, names, data), pos + 1
+        key, pos = _read_string(buf, pos + 1)
+        if key == "Y" and t == 1:
+            y = _SEC_Y.unpack_from(buf, pos)[0]
+            pos += 1
+        elif key == "block_states" and t == 10:
+            while True:
+                tt = buf[pos]
+                if tt == 0:
+                    pos += 1
+                    break
+                k2, pos = _read_string(buf, pos + 1)
+                if k2 == "palette" and tt == 9:
+                    names, pos = _palette_names(buf, pos)
+                elif k2 == "data" and tt == 12:
+                    data, pos = _long_array(buf, pos)
+                else:
+                    pos = _skip(buf, pos, tt)
+        else:
+            pos = _skip(buf, pos, t)
+
+
+def read_light_chunk(data):
+    """
+    What the map needs of a chunk (1.18+ layout): status, yPos, heightmaps, block palettes and
+    indices of the sections, structure starts. None for chunks in the old "Level" layout.
+    """
+    if not data or data[0] != 10:
+        return None
+    _, pos = _read_string(data, 1)
+    out = {"sections": [], "heightmaps": {}, "status": None, "ypos": None, "structures": None}
+    wanted = {"sections", "Heightmaps", "structures", "Status", "yPos"}
+    while True:
+        t = data[pos]
+        if t == 0 or not wanted:
+            return out          # the game writes block_ticks & co. after these: no need to walk them
+        key, pos = _read_string(data, pos + 1)
+        wanted.discard(key)
+        if key == "sections" and t == 9:
+            it, n = data[pos], _INT.unpack_from(data, pos + 1)[0]
+            if it != 10:
+                pos = _skip(data, pos, 9)
+                continue
+            pos += 5
+            for _ in range(max(0, n)):
+                sec, pos = _light_section(data, pos)
+                out["sections"].append(sec)
+        elif key == "Heightmaps" and t == 10:
+            while True:
+                tt = data[pos]
+                if tt == 0:
+                    pos += 1
+                    break
+                k2, pos = _read_string(data, pos + 1)
+                if tt == 12:
+                    out["heightmaps"][str(k2)], pos = _long_array(data, pos)
+                else:
+                    pos = _skip(data, pos, tt)
+        elif key == "structures" and t == 10:
+            out["structures"], pos = _read_payload(data, pos, t)
+        elif key == "Status" and t == 8:
+            s, pos = _read_string(data, pos)
+            out["status"] = str(s)
+            if out["status"] not in ("full", "minecraft:full"):
+                return out      # still being generated: not drawn anyway
+        elif key == "yPos" and t == 3:
+            out["ypos"] = _INT.unpack_from(data, pos)[0]
+            pos += 4
+        elif key == "Level":
+            return None
+        else:
+            pos = _skip(data, pos, t)
+
+
+def _heightmap(longs, min_y):
+    """Top-block Y of the 256 columns from a packed heightmap (9 bits, 7 per long), or None."""
+    if longs is None or len(longs) != 37:
+        return None
+    out = []
+    append = out.append
+    base = min_y - 1
+    for v in longs:
+        for _ in range(7):
+            append((v & 511) + base)
+            v >>= 9
+    del out[256:]
+    return out
+
+
+_RGB_BYTES = {}
+
+
+def _rgb_bytes(name):
+    b = _RGB_BYTES.get(name)
+    if b is None:
+        b = _RGB_BYTES[name] = bytes(surface_rgb(name))
+    return b
+
+
+def _section_record(names, data):
+    """[kinds, colours (filled on demand), names, data, bits, per long, mask] of a section."""
+    kinds = [block_kind(nm) for nm in names]
+    if data is None or len(names) == 1 or not len(data):
+        return [kinds, [None] * len(names), names, None, 0, 1, 0]
+    bits = _palette_bits(len(names))
+    return [kinds, [None] * len(names), names, data, bits, 64 // bits, (1 << bits) - 1]
+
+
+def light_surface(light, heights, min_y):
+    """
+    (colour bytes list, depth list) of the 256 columns of a light chunk: like chunk_surface, but
+    the block palettes are decoded only for the sections actually looked at, and the depth of the
+    water comes from the OCEAN_FLOOR heightmap when the game has written it (checked, not trusted).
+    """
+    raw = {y: (names, data) for y, names, data in light["sections"] if y is not None and names}
+    secs = {}
+
+    def look(y, col):
+        """(kind, palette index, section record) of the block at height y of a column."""
+        sy = y >> 4
+        rec = secs.get(sy)
+        if rec is None:
+            r = raw.get(sy)
+            rec = secs[sy] = _section_record(*r) if r else _section_record(["minecraft:air"], None)
+        data = rec[3]
+        if data is None:
+            return rec[0][0], 0, rec
+        q, r = divmod(((y & 15) << 8) | col, rec[5])
+        i = (data[q] >> (r * rec[4])) & rec[6] if q < len(data) else 0
+        kinds = rec[0]
+        if i >= len(kinds):
+            i = 0
+        return kinds[i], i, rec
+
+    floor = _heightmap(light["heightmaps"].get("OCEAN_FLOOR"), min_y)
+    colors = [None] * 256
+    depth = [0] * 256
+    for col in range(256):
+        y = heights[col]
+        k, i, rec = look(y, col)
+        steps = 0
+        while k == SEE_THROUGH and y > min_y and steps < 48:
+            y -= 1
+            steps += 1
+            k, i, rec = look(y, col)
+        if k == WATER:
+            d = None
+            if floor is not None:
+                # bottom of the water from the heightmap, verified on the two blocks around it
+                dd = min(24, y - floor[col])
+                if 1 <= dd < 24 and y - dd > min_y:
+                    kb, ib, rb = look(y - dd, col)
+                    if kb != WATER and (dd == 1 or look(y - dd + 1, col)[0] == WATER):
+                        d, i, rec = dd, ib, rb
+                elif dd >= 24 and y - 23 > min_y:
+                    kb, ib, rb = look(y - 23, col)
+                    if kb == WATER:
+                        d, i, rec = 24, ib, rb
+            if d is None:
+                d = 1
+                while d < 24 and y - d > min_y:
+                    kb, i, rec = look(y - d, col)
+                    if kb != WATER:
+                        break
+                    d += 1
+            depth[col] = d
+        c = rec[1][i]
+        if c is None:
+            c = rec[1][i] = _rgb_bytes(rec[2][i])
+        colors[col] = c
+    return colors, depth
+
+
+def _old_chunk_surface(region, key, h):
+    """Chunks the light reader does not handle (old layout, no heightmap): full parse."""
+    chunk, _ = region.chunks[key]
+    region.chunks.clear_cache()
+    if "Level" not in chunk and not chunk_is_full(chunk):
+        return None, None, None, []
+    if h is None:
+        h, chunk = _column_heights(region, key, chunk)
+        if h is None:
+            return None, None, None, []
+    if "Level" in chunk:
+        return h, None, None, []
+    try:
+        colors, dep = chunk_surface(chunk, h)
+        colors = [bytes(c) for c in colors]
+    except Exception:
+        colors = dep = None
+    return h, colors, dep, chunk_structures(chunk, region.rx, region.rz)
+
+
+def _render_chunk(region, key, detailed):
+    """(heights, colour bytes or None, depth or None, structures) of a chunk, heights None = not drawn."""
+    if not detailed:
+        h, _ = _column_heights(region, key)
+        return h, None, None, []
+    try:
+        data = region.chunk_bytes(key)
+        light = read_light_chunk(data)
+    except Exception as e:
+        region._bad.add(key)
+        print(f"Error reading chunk {key} in {region.file_path}: {e}")
+        return None, None, None, []
+    if light is None:
+        return _old_chunk_surface(region, key, None)
+    if light["status"] is not None and light["status"] not in ("full", "minecraft:full"):
+        return None, None, None, []       # still being generated by the game: shown as not generated
+    ys = [y for y, names, _ in light["sections"] if y is not None and names]
+    min_y = min(ys) * 16 if ys else -64
+    h = _heightmap(light["heightmaps"].get("WORLD_SURFACE"), min_y)
+    if h is None:
+        return _old_chunk_surface(region, key, None)
+    try:
+        colors, dep = light_surface(light, h, min_y)
+    except Exception:
+        colors = dep = None
+    st = light["structures"]
+    structures = chunk_structures({"structures": st}, region.rx, region.rz) if st else []
+    return h, colors, dep, structures
+
+
+def build_tile(path, detailed=True, cancelled=lambda: False, base=None):
     """
     Renders a region file. Returns a dict:
         heights    array('h') of TILE*TILE top-block Y values (NO_DATA = not generated)
@@ -248,54 +563,84 @@ def build_tile(path, detailed=True, cancelled=lambda: False):
         depth      bytearray TILE*TILE with the water depth (0 = land)
         structures [(id, x1, z1, x2, z2)] structure starts found in the region
         detailed   whether block colours were read (False = height colours only)
+        chunk_sig  per chunk, its place and timestamp in the region header (0 = absent)
+        chunk_structures {chunk index: [structures]}
     or None if cancelled.
+    base: an older detailed tile of the same region; only the chunks whose header entry changed
+    since then are read again (the game rewrites just the chunks it saved).
     """
     region = MCARegion(path)
+    region.skip_tags = TILE_SKIP_TAGS            # read only: ticks, block entities... are never drawn
     n = TILE * TILE
-    heights = array.array("h", [NO_DATA]) * n
-    rgb = bytearray(n * 3)
-    depth = bytearray(n)
-    structures = []
-    done = 0
-    for key in list(region.chunks):
+    if base is not None and detailed and base.get("detailed") and base.get("chunk_sig"):
+        heights = array.array("h", base["heights"])
+        rgb = bytearray(base["rgb"])
+        depth = bytearray(base["depth"])
+        old_sig = base["chunk_sig"]
+        chunk_structs = {int(k): list(v) for k, v in (base.get("chunk_structures") or {}).items()}
+    else:
+        heights = array.array("h", [NO_DATA]) * n
+        rgb = bytearray(n * 3)
+        depth = bytearray(n)
+        old_sig = None
+        chunk_structs = {}
+    sig = _chunk_signatures(region)
+    no_row = array.array("h", [NO_DATA]) * 16
+    zero48, zero16 = bytes(48), bytes(16)
+    for idx in range(1024):
         if cancelled():
             return None
+        key = (idx % 32, idx // 32)
+        present = key in region._raw
+        if old_sig is not None and old_sig[idx] == sig[idx]:
+            continue                             # unchanged since the base tile
         cx, cz = key
-        chunk = None
-        if detailed:
-            try:
-                chunk, _ = region.chunks[key]
-            except KeyError:
-                continue
-        if chunk is not None and "Level" not in chunk and not chunk_is_full(chunk):
-            continue  # still being generated by the game: shown as not generated
-        h, chunk = _column_heights(region, key, chunk)
+        if old_sig is not None:                  # changed or removed: clear it first
+            chunk_structs.pop(idx, None)
+            for z in range(16):
+                row = (cz * 16 + z) * TILE + cx * 16
+                heights[row:row + 16] = no_row
+                rgb[row * 3:row * 3 + 48] = zero48
+                depth[row:row + 16] = zero16
+        if not present:
+            continue
+        try:
+            h, colors, dep, structs = _render_chunk(region, key, detailed)
+        except KeyError:
+            continue
         if h is None:
             continue
-        colors = dep = None
-        if detailed and chunk is not None and "Level" not in chunk:
-            try:
-                colors, dep = chunk_surface(chunk, h)
-            except Exception:
-                colors = None
-            structures.extend(chunk_structures(chunk, region.rx, region.rz))
+        if structs:
+            chunk_structs[idx] = structs
         for z in range(16):
             row = (cz * 16 + z) * TILE + cx * 16
-            for x in range(16):
-                col = z * 16 + x
-                y = h[col]
-                i = row + x
-                heights[i] = max(-2048, min(4095, y))
-                c = colors[col] if colors else HEIGHT_RGB.get(y, (35, 120, 45))
-                rgb[i * 3:i * 3 + 3] = bytes(c)
-                if dep:
-                    depth[i] = min(255, dep[col])
-        done += 1
-        if done % 64 == 0:
-            region.chunks.clear_cache()
-    region.chunks.clear_cache()
+            hs = h[z * 16:z * 16 + 16]
+            heights[row:row + 16] = array.array("h", [-2048 if y < -2048 else 4095 if y > 4095 else y for y in hs])
+            if colors:
+                rgb[row * 3:row * 3 + 48] = b"".join(colors[z * 16:z * 16 + 16])
+            else:
+                rgb[row * 3:row * 3 + 48] = b"".join(_height_bytes(y) for y in hs)
+            if dep:
+                depth[row:row + 16] = bytes(255 if d > 255 else d for d in dep[z * 16:z * 16 + 16])
+    structures = [tuple(s) for idx in sorted(chunk_structs) for s in chunk_structs[idx]]
     return {"heights": heights, "rgb": rgb, "depth": depth, "structures": structures, "detailed": detailed,
-            "complete": not region._bad}
+            "complete": not region._bad, "chunk_sig": sig, "chunk_structures": chunk_structs}
+
+
+def _chunk_signatures(region):
+    """Per chunk index: its header entry (sectors and timestamp), 0 if the chunk is absent."""
+    offs, ts = region.header_offsets, region.timestamps
+    return [(offs[i] << 32 | ts[i]) if (i % 32, i // 32) in region._raw else 0 for i in range(1024)]
+
+
+_HEIGHT_BYTES = {}
+
+
+def _height_bytes(y):
+    b = _HEIGHT_BYTES.get(y)
+    if b is None:
+        b = _HEIGHT_BYTES[y] = bytes(HEIGHT_RGB.get(y, (35, 120, 45)))
+    return b
 
 
 def shade(tile):
@@ -355,7 +700,11 @@ def default_cache_root():
 
 
 class TileCache:
-    """Detailed tiles on disk: <root>/<hash of the region folder>/r.X.Z.tile (zlib)."""
+    """
+    Detailed tiles on disk: <root>/<hash of the region folder>/r.X.Z.tile (zlib). Each file keeps
+    the final image too (opening a world already seen costs no rendering at all) and the header
+    entries of the chunks, so a region the game has saved again is redrawn only where it changed.
+    """
 
     def __init__(self, region_dir, root=None):
         key = hashlib.sha1(os.path.abspath(region_dir).lower().encode("utf-8")).hexdigest()[:16]
@@ -371,41 +720,61 @@ class TileCache:
 
     def load(self, rx, rz, path):
         """Cached tile if still valid for the region file, else None."""
+        tile, stamp = self.load_any(rx, rz)
+        try:
+            return tile if tile is not None and stamp == self._stamp(path) else None
+        except OSError:
+            return None
+
+    def load_any(self, rx, rz):
+        """(tile, stamp of the region file it was drawn from), even if the region changed since; (None, None)."""
         try:
             with open(self._file(rx, rz), "rb") as f:
                 raw = zlib.decompress(f.read())
             head_len = int.from_bytes(raw[:4], "big")
             head = json.loads(raw[4:4 + head_len].decode("utf-8"))
-            if head.get("v") != CACHE_VERSION or head.get("stamp") != self._stamp(path):
-                return None
-            body = raw[4 + head_len:]
+            if head.get("v") != CACHE_VERSION:
+                return None, None
+            body = memoryview(raw)[4 + head_len:]
             n = TILE * TILE
+            if len(body) != 1024 * 8 + n * 10:
+                return None, None
+            sig = array.array("Q")
+            sig.frombytes(body[:8192])
             heights = array.array("h")
-            heights.frombytes(body[:n * 2])
+            heights.frombytes(body[8192:8192 + n * 2])
             if sys.byteorder != "little":
+                sig.byteswap()
                 heights.byteswap()
-            rgb = bytearray(body[n * 2:n * 5])
-            depth = bytearray(body[n * 5:n * 6])
-            if len(heights) != n or len(rgb) != n * 3 or len(depth) != n:
-                return None
-            structures = [tuple(s) for s in head.get("structures", [])]
-            return {"heights": heights, "rgb": rgb, "depth": depth, "structures": structures,
-                    "detailed": head.get("detailed", True)}
-        except (OSError, ValueError, zlib.error, KeyError):
-            return None
+            o = 8192 + n * 2
+            chunk_structs = {int(k): [tuple(x) for x in v] for k, v in head.get("structures", {}).items()}
+            tile = {"heights": heights, "rgb": bytearray(body[o:o + n * 3]), "depth": bytearray(body[o + n * 3:o + n * 4]),
+                    "image": bytes(body[o + n * 4:]), "detailed": head.get("detailed", True),
+                    "structures": [s for k in sorted(chunk_structs) for s in chunk_structs[k]],
+                    "chunk_structures": chunk_structs, "chunk_sig": list(sig), "complete": True}
+            return tile, head.get("stamp")
+        except (OSError, ValueError, zlib.error, KeyError, TypeError):
+            return None, None
 
     def save(self, rx, rz, path, tile, stamp=None):
         try:
             os.makedirs(self.dir, exist_ok=True)
+            image = tile.get("image") or shade(tile)
+            chunk_structs = tile.get("chunk_structures")
+            if chunk_structs is None:
+                chunk_structs = {0: tile["structures"]} if tile["structures"] else {}
             head = json.dumps({"v": CACHE_VERSION, "stamp": stamp or self._stamp(path), "detailed": tile["detailed"],
-                               "structures": tile["structures"]}).encode("utf-8")
+                               "structures": {str(k): v for k, v in chunk_structs.items()}}).encode("utf-8")
+            sig = array.array("Q", tile.get("chunk_sig") or [0] * 1024)
             heights = array.array("h", tile["heights"])
             if sys.byteorder != "little":
+                sig.byteswap()
                 heights.byteswap()
-            raw = len(head).to_bytes(4, "big") + head + heights.tobytes() + bytes(tile["rgb"]) + bytes(tile["depth"])
-            tmp = self._file(rx, rz) + ".tmp"
+            raw = b"".join((len(head).to_bytes(4, "big"), head, sig.tobytes(), heights.tobytes(),
+                            bytes(tile["rgb"]), bytes(tile["depth"]), image))
+            tmp = self._file(rx, rz) + f".{os.getpid()}.tmp"
             with open(tmp, "wb") as f:
-                f.write(zlib.compress(raw, 6))
+                f.write(zlib.compress(raw, 1))
             os.replace(tmp, self._file(rx, rz))
         except OSError:
             pass
@@ -433,22 +802,37 @@ def structure_label(sid):
     return names.get(short, short.replace("_", " ").capitalize())
 
 
+def _payload(tile):
+    return {"image": tile.get("image") or shade(tile), "heights": tile["heights"], "structures": tile["structures"],
+            "detailed": tile["detailed"], "complete": tile.get("complete", True), "stamp": tile.get("stamp")}
+
+
 def render_job(path, rx, rz, region_dir, detailed, cache_root=None):
     """
     Worker entry point (runs in a separate process): renders a region and, for detailed tiles,
-    stores it in the disk cache. Returns the payload for the map, or None if the region is empty.
+    stores it in the disk cache. A cached tile of an older version of the file is the starting
+    point: only its changed chunks are read again. Returns the payload for the map, or None.
     """
-    cache = TileCache(region_dir, root=cache_root)
-    tile = cache.load(rx, rz, path) if detailed else None
-    if tile is None:
-        try:
-            stamp = TileCache._stamp(path)       # taken before reading: a write meanwhile invalidates it
-        except OSError:
-            stamp = None
-        tile = build_tile(path, detailed=detailed)
+    try:
+        stamp = TileCache._stamp(path)           # taken before reading: a write meanwhile invalidates it
+    except OSError:
+        stamp = None
+    if not detailed:
+        tile = build_tile(path, detailed=False)
         if tile is None:
             return None
-        if detailed and stamp and tile.get("complete", True):
-            cache.save(rx, rz, path, tile, stamp)
-    return {"image": shade(tile), "heights": tile["heights"], "structures": tile["structures"],
-            "detailed": tile["detailed"]}
+        tile["stamp"] = stamp
+        return _payload(tile)
+    cache = TileCache(region_dir, root=cache_root)
+    base, base_stamp = cache.load_any(rx, rz)
+    if base is not None and stamp is not None and base_stamp == stamp:
+        base["stamp"] = stamp
+        return _payload(base)
+    tile = build_tile(path, detailed=True, base=base)
+    if tile is None:
+        return None
+    tile["image"] = shade(tile)
+    tile["stamp"] = stamp
+    if stamp and tile.get("complete", True):
+        cache.save(rx, rz, path, tile, stamp)
+    return _payload(tile)

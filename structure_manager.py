@@ -1,8 +1,86 @@
 import os
+from array import array
+from collections.abc import Mapping
 from nbt_codec import load_nbt
 
 # DataVersion of 1.13 ("The Flattening"): older files use block names that no longer exist
 DATA_VERSION_FLATTENING = 1451
+
+# Structures with more blocks than this keep them packed in arrays (a few bytes per block)
+PACKED_MIN_BLOCKS = 1_000_000
+
+
+class PackedBlocks(Mapping):
+    """
+    The blocks of a very large structure: four array('i') (x, y, z, palette index) and the palette
+    of shared state dicts. It behaves like the usual {(x, y, z): state} dict, but random access is
+    slow (it scans): code that handles big structures iterates (iter_xyzs(), items()).
+    A rotation is not applied to the arrays: 'rot' quarter turns are applied while iterating.
+    """
+    packed = True
+
+    def __init__(self, xs, ys, zs, si, states, rot=0, base_w=None, base_l=None):
+        self.xs, self.ys, self.zs, self.si, self.states = xs, ys, zs, si, states
+        self.rot = rot % 4
+        self.base_w = base_w if base_w is not None else (max(xs) + 1 if len(xs) else 0)
+        self.base_l = base_l if base_l is not None else (max(zs) + 1 if len(zs) else 0)
+        self._found = {}
+
+    def __len__(self):
+        return len(self.xs)
+
+    def iter_xyzs(self):
+        """(x, y, z, palette index) of every block, rotation applied."""
+        r, w1, l1 = self.rot, self.base_w - 1, self.base_l - 1
+        it = zip(self.xs, self.ys, self.zs, self.si)
+        if r == 0:
+            return it
+        if r == 1:
+            return ((l1 - z, y, x, s) for x, y, z, s in it)
+        if r == 2:
+            return ((w1 - x, y, l1 - z, s) for x, y, z, s in it)
+        return ((z, y, w1 - x, s) for x, y, z, s in it)
+
+    def arrays(self):
+        """x, y, z, palette index arrays with the rotation applied (copies only when rotated)."""
+        if self.rot == 0:
+            return self.xs, self.ys, self.zs, self.si
+        xs, zs = array("i"), array("i")
+        for x, _, z, _ in self.iter_xyzs():
+            xs.append(x)
+            zs.append(z)
+        return xs, self.ys, zs, self.si
+
+    def __iter__(self):
+        return ((x, y, z) for x, y, z, _ in self.iter_xyzs())
+
+    def items(self):
+        st = self.states
+        return (((x, y, z), st[s]) for x, y, z, s in self.iter_xyzs())
+
+    def values(self):
+        st = self.states
+        return (st[s] for s in self.si)
+
+    def _find(self, key):
+        if key not in self._found:
+            x0, y0, z0 = key
+            self._found[key] = next((s for x, y, z, s in self.iter_xyzs() if x == x0 and z == z0 and y == y0),
+                                    None)
+        return self._found[key]
+
+    def __getitem__(self, key):
+        s = self._find(tuple(key))
+        if s is None:
+            raise KeyError(key)
+        return self.states[s]
+
+    def __contains__(self, key):
+        return self._find(tuple(key)) is not None
+
+    def count_states(self):
+        from collections import Counter
+        return Counter(self.si)
 
 
 class Structure:
@@ -24,6 +102,14 @@ class Structure:
     def modded_blocks(self):
         """Counts blocks that do not belong to the minecraft: namespace, per namespace."""
         counts = {}
+        if getattr(self.blocks, "packed", False):
+            modded = {i: b["Name"].split(":", 1)[0] for i, b in enumerate(self.blocks.states)
+                      if ":" in b.get("Name", "") and not b["Name"].startswith("minecraft:")}
+            if modded:
+                for i, c in self.blocks.count_states().items():
+                    if i in modded:
+                        counts[modded[i]] = counts.get(modded[i], 0) + c
+            return counts
         for block in self.blocks.values():
             name = block.get("Name", "minecraft:air")
             ns = name.split(":", 1)[0] if ":" in name else "minecraft"
@@ -57,6 +143,9 @@ class Structure:
             new_l = self.length
             
         new_h = self.height
+
+        if getattr(self.blocks, "packed", False):
+            return self._rotate_packed(steps, new_w, new_h, new_l, angle)
 
         for (x, y, z), block in self.blocks.items():
             # Apply coordinate rotation step-by-step
@@ -112,6 +201,32 @@ class Structure:
                 setattr(rotated, attr, dict(getattr(self, attr)))
         return rotated
 
+    def _rotate_packed(self, steps, new_w, new_h, new_l, angle):
+        """Rotation of packed blocks: O(1) for the positions, properties once per palette entry."""
+        pb = self.blocks
+        states = [{"Name": b["Name"], "Properties": rotate_properties(b.get("Properties") or {}, angle)
+                   if b.get("Properties") else {}} for b in pb.states]
+        blocks = PackedBlocks(pb.xs, pb.ys, pb.zs, pb.si, states, pb.rot + steps, pb.base_w, pb.base_l)
+        rotated = Structure(new_w, new_h, new_l, blocks, self.data_version)
+        rotated.ground_offset = self.ground_offset
+        rotated.preview_source = (getattr(self, "preview_source", (None, 0))[0],
+                                  (getattr(self, "preview_source", (None, 0))[1] + steps) % 4)
+        for (x, y, z), data in self.block_nbt.items():
+            rx, rz, l = x, z, self.length
+            for i in range(steps):
+                rx, rz = l - 1 - rz, rx
+                l = self.width if i % 2 == 0 else self.length
+            rotated.block_nbt[(rx, y, rz)] = data
+        for ent in self.entities:
+            ex, ey, ez = ent["pos"]
+            l = self.length
+            for i in range(steps):
+                ex, ez = l - ez, ex
+                l = self.width if i % 2 == 0 else self.length
+            rotated.entities.append({"pos": (ex, ey, ez), "nbt": ent["nbt"],
+                                     "yaw": (ent.get("yaw", 0.0) + 90.0 * steps) % 360.0})
+        return rotated
+
     @classmethod
     def load(cls, file_path):
         if not os.path.exists(file_path):
@@ -128,10 +243,9 @@ class Structure:
     @classmethod
     def _load_nbt(cls, file_path):
         """Loads native Minecraft Structure NBT format (fast path, fine for millions of blocks)."""
-        from nbt_codec import parse_structure_bytes, _maybe_decompress
-        with open(file_path, "rb") as f:
-            block_nbt = {}
-            tag, block_list = parse_structure_bytes(_maybe_decompress(f.read()), block_nbt)
+        from nbt_codec import read_structure_file
+        block_nbt = {}
+        tag, fields = read_structure_file(file_path, block_nbt)
         if not tag:
             raise ValueError("Empty or invalid NBT file")
         size_list = tag.get("size", [])
@@ -145,17 +259,25 @@ class Structure:
             props = state.get("Properties", {})
             states.append({"Name": str(state.get("Name", "minecraft:air")),
                            "Properties": {k: str(v) for k, v in props.items()}})
-        blocks = {}
         n = len(states)
-        for x, y, z, idx in block_list or ():
-            if 0 <= idx < n:
-                blocks[(x, y, z)] = states[idx]
+        xs, ys, zs, si = fields or (array("i"), array("i"), array("i"), array("i"))
+        if len(xs) >= PACKED_MIN_BLOCKS and n and max(si) < n and min(si) >= 0:
+            blocks = PackedBlocks(xs, ys, zs, si, states, 0, w, l)
+        else:
+            blocks = {}
+            for x, y, z, idx in zip(xs, ys, zs, si):
+                if 0 <= idx < n:
+                    blocks[(x, y, z)] = states[idx]
 
         dv = tag.get("DataVersion")
         struct = cls(w, h, l, blocks, int(dv) if dv is not None else None)
         meta = tag.get("MinecraftBuilder") or {}
         struct.ground_offset = int(meta.get("groundOffset", 0))
         struct.block_nbt = block_nbt
+        try:
+            struct.preview_source = (f"{os.path.abspath(file_path)}|{os.path.getmtime(file_path)}", 0)
+        except OSError:
+            struct.preview_source = (None, 0)
         struct.technical = [tuple(int(v) for v in box) for box in meta.get("technical", []) or [] if len(box) == 6]
         for ent in tag.get("entities", []) or []:
             pos = ent.get("pos") or ent.get("blockPos")

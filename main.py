@@ -24,13 +24,14 @@ from PyQt6.QtWidgets import (
     QScrollArea, QFrame
 )
 from PyQt6.QtGui import QFont, QIcon, QColor
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings, QTimer
 
 from nbt_codec import load_nbt
 from mca_codec import MCARegion, UnsupportedChunkFormat
 from structure_manager import Structure
 from world_editor import World, inject_structures
 import world_locator
+import game_link
 import json
 import catalog
 import structure_generators as sgen
@@ -83,6 +84,10 @@ QTabWidget::pane {
     border: 1px solid #27272a;
     background: #1b1b1f;
     border-radius: 8px;
+}
+QScrollArea#panel_scroll, QScrollArea#panel_scroll > QWidget#qt_scrollarea_viewport, QWidget#panel_page {
+    background-color: #1b1b1f;
+    border: none;
 }
 QTabBar::tab {
     background: #141416;
@@ -271,6 +276,25 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:vertical:hover {
     background: #2ecc71;
 }
+QScrollBar:horizontal {
+    border: none;
+    background: #141416;
+    height: 8px;
+}
+QScrollBar::handle:horizontal {
+    background: #27272a;
+    border-radius: 4px;
+    min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #2ecc71;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
 QCheckBox {
     spacing: 8px;
     font-size: 11px;
@@ -420,7 +444,6 @@ class MinecraftBuilderApp(QMainWindow):
         self.load_local_templates()
         
         # Defer world scanning to keep window startup instant and buttery smooth
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self.scan_worlds)
         
         self.setAcceptDrops(True)
@@ -507,8 +530,10 @@ class MinecraftBuilderApp(QMainWindow):
         def add_scrolling_tab(widget, name):
             """Every tab scrolls: on small screens the buttons keep their size instead of being squashed."""
             area = QScrollArea()
+            area.setObjectName("panel_scroll")      # dark background (the system default is light grey)
             area.setWidgetResizable(True)
             area.setFrameShape(QFrame.Shape.NoFrame)
+            widget.setObjectName("panel_page")
             area.setWidget(widget)
             return tabs_add(area, name)
         self.tabs.addTab = add_scrolling_tab
@@ -831,6 +856,9 @@ class MinecraftBuilderApp(QMainWindow):
                                   else "Operazione annullata."))
         self.map_viewer.unlocked.connect(self.unlock_placement)
         self.map_viewer.game_structures_changed.connect(self.update_structure_jump_list)
+        self.map_viewer.staged_selected.connect(self.on_staged_selected)
+        self.map_viewer.staged_moved.connect(self.move_staged)
+        self.map_viewer.staged_action.connect(self.on_staged_action)
 
         # Map toolbar: overlays and quick navigation
         map_bar = QHBoxLayout()
@@ -846,18 +874,58 @@ class MinecraftBuilderApp(QMainWindow):
         self.show_placed_cb.setToolTip("Le strutture iniettate con questo programma, colorate per categoria.")
         self.show_game_cb.setToolTip("Villaggi, templi, portali e altre strutture generate da Minecraft.")
         map_bar.addStretch()
+        # second row: on narrow screens the overlays and the navigation never overlap
+        nav_bar = QHBoxLayout()
+        nav_bar.setContentsMargins(8, 0, 8, 2)
         self.structure_jump = QComboBox()
-        self.structure_jump.setMinimumWidth(230)
+        self.structure_jump.setMinimumWidth(160)
+        self.structure_jump.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.structure_jump.setMinimumContentsLength(18)
         self.structure_jump.activated.connect(self.jump_to_structure)
-        map_bar.addWidget(self.structure_jump)
+        nav_bar.addWidget(self.structure_jump, 1)
         whole_btn = QPushButton("Tutto il mondo")
         whole_btn.setToolTip("Rimpicciolisce la mappa per mostrare tutte le regioni del mondo.")
         whole_btn.clicked.connect(self.map_viewer.show_whole_world)
-        map_bar.addWidget(whole_btn)
+        nav_bar.addWidget(whole_btn)
         here_btn = QPushButton("Giocatore")
         here_btn.clicked.connect(self.go_to_player_region)
-        map_bar.addWidget(here_btn)
+        nav_bar.addWidget(here_btn)
+        self.live_btn = QPushButton("Live")
+        self.live_btn.setCheckable(True)
+        self.live_btn.setToolTip(
+            "Mappa dal vivo mentre giochi: la posizione del giocatore e il terreno si aggiornano\n"
+            "quando Minecraft salva (salvataggio automatico ogni 5 minuti circa, o 'Salva ed esci').\n"
+            "Per aggiornare la posizione SUBITO premi F3+C nel gioco: il programma legge le coordinate copiate.")
+        self.live_btn.toggled.connect(self.set_live_mode)
+        nav_bar.addWidget(self.live_btn)
+        self.follow_cb = QCheckBox("Segui")
+        self.follow_cb.setToolTip("In modalita' Live centra la mappa sul giocatore a ogni spostamento.")
+        self.follow_cb.setChecked(True)
+        self.follow_cb.setEnabled(False)
+        nav_bar.addWidget(self.follow_cb)
+        self.auto_pos_cb = QCheckBox("Posizione continua")
+        self.auto_pos_cb.setToolTip(
+            "Minecraft scrive la posizione su disco solo quando salva, e salva quando va in pausa: se la mappa\n"
+            "e' su un altro schermo il gioco non va mai in pausa. Con questa opzione, mentre giochi (Minecraft in\n"
+            "primo piano, nessuna chat o inventario aperti) il programma preme per te F3+C ogni 2 secondi e legge le\n"
+            "coordinate; poi rimette negli appunti quello che c'era. Nella chat del gioco compare il messaggio di F3+C.")
+        self.auto_pos_cb.setChecked(game_link.IS_WINDOWS)
+        self.auto_pos_cb.setEnabled(False)
+        self.auto_pos_cb.setVisible(game_link.IS_WINDOWS)
+        nav_bar.addWidget(self.auto_pos_cb)
+        self.live_timer = QTimer(self)
+        self.live_timer.setInterval(2000)
+        self.live_timer.timeout.connect(self.live_tick)
+        self.auto_pos_timer = QTimer(self)
+        self.auto_pos_timer.setInterval(2000)
+        self.auto_pos_timer.timeout.connect(self.auto_locate)
+        self._auto_pending = None       # (time the keys were sent, clipboard contents to put back)
+        self._auto_misses = 0
+        self._live_stamp = None
+        self._live_info = ""
+        self._live_other_dim = None
         center_layout.addLayout(map_bar)
+        center_layout.addLayout(nav_bar)
         center_layout.addWidget(self.map_viewer, 1)
         self.update_structure_jump_list()
         
@@ -910,10 +978,45 @@ class MinecraftBuilderApp(QMainWindow):
         self.fill_foundation_checkbox.setChecked(True)
         inspector_layout.addWidget(self.fill_foundation_checkbox)
         
-        self.blend_checkbox = QCheckBox("Raccorda il terreno intorno (pendii naturali)")
-        self.blend_checkbox.setChecked(True)
-        self.blend_checkbox.setToolTip("Aggiunge terra a pendio intorno agli edifici rialzati, senza mai scavare.")
-        inspector_layout.addWidget(self.blend_checkbox)
+        terrain_row = QHBoxLayout()
+        terrain_row.addWidget(QLabel("Terreno intorno:"))
+        self.terrain_combo = QComboBox()
+        self.terrain_combo.addItem("Paesaggio naturale", "natural")
+        self.terrain_combo.addItem("Solo pendio di terra", "blend")
+        self.terrain_combo.addItem("Lascia com'e'", "none")
+        self.terrain_combo.setToolTip(
+            "Paesaggio naturale: se la struttura sta piu' in alto del terreno sale una collina con i materiali\n"
+            "del bioma (erba, sabbia, neve, roccia dove e' ripido, fiori, massi, alberelli) e una scalinata\n"
+            "nel materiale della struttura scende dalle porte; su un pendio il terreno davanti viene\n"
+            "terrazzato; sull'acqua nasce un'isola con la spiaggia (o la struttura galleggia, vedi sotto).\n"
+            "Solo pendio di terra: qualche blocco di terra a scivolo intorno agli edifici rialzati.")
+        terrain_row.addWidget(self.terrain_combo, 1)
+        inspector_layout.addLayout(terrain_row)
+
+        water_row = QHBoxLayout()
+        water_row.addWidget(QLabel("Sull'acqua:"))
+        self.water_combo = QComboBox()
+        self.water_combo.addItem("Isola con spiaggia", "island")
+        self.water_combo.addItem("Galleggia (barche, basi sottomarine)", "float")
+        self.water_combo.setToolTip(
+            "Cosa succede se la metti sull'acqua: un'isola di sabbia su cui appoggiarla, oppure la struttura\n"
+            "galleggia immersa di quanti blocchi vuoi (l'acqua rimasta dentro lo scafo viene tolta).\n"
+            "La scelta viene ricordata per ogni struttura.")
+        water_row.addWidget(self.water_combo, 1)
+        inspector_layout.addLayout(water_row)
+        depth_row = QHBoxLayout()
+        depth_row.addWidget(QLabel("Immersione:"))
+        self.depth_spin = QSpinBox()
+        self.depth_spin.setRange(0, 160)
+        self.depth_spin.setSuffix(" blocchi sotto il pelo dell'acqua")
+        self.depth_spin.setToolTip("Quanti strati della struttura stanno sott'acqua (una barca: 2-4; una base "
+                                   "sottomarina: la sua altezza o di piu'). Ricordata per ogni struttura.")
+        depth_row.addWidget(self.depth_spin, 1)
+        inspector_layout.addLayout(depth_row)
+        self._loading_water = False
+        self.water_combo.currentIndexChanged.connect(self.on_water_settings_changed)
+        self.depth_spin.valueChanged.connect(self.on_water_settings_changed)
+        self.depth_spin.setEnabled(False)
 
         self.clear_terrain_checkbox = QCheckBox("Scava ostacoli di terreno (Aria)")
         self.clear_terrain_checkbox.setChecked(True)
@@ -973,6 +1076,7 @@ class MinecraftBuilderApp(QMainWindow):
         self.staged_list.setToolTip("Canc toglie gli elementi selezionati dalla coda.")
         from PyQt6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self.staged_list, activated=self.remove_selected_staged)
+        self.staged_list.itemSelectionChanged.connect(self.on_staged_list_selection)
         self.staged_list.itemSelectionChanged.connect(self.staged_list_selection_changed)
         inspector_layout.addWidget(self.staged_list)
         
@@ -1026,6 +1130,7 @@ class MinecraftBuilderApp(QMainWindow):
         inspector_layout.addWidget(self.console)
 
         inspector_scroll = QScrollArea()
+        inspector_scroll.setObjectName("panel_scroll")
         inspector_scroll.setWidgetResizable(True)
         inspector_scroll.setFrameShape(QFrame.Shape.NoFrame)
         inspector_scroll.setWidget(inspector)
@@ -1040,7 +1145,6 @@ class MinecraftBuilderApp(QMainWindow):
         main_splitter.setCollapsible(0, False)
         main_splitter.setCollapsible(2, False)
         self.main_splitter = main_splitter
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, self._initial_splitter_sizes)
 
     def _initial_splitter_sizes(self):
@@ -1171,7 +1275,6 @@ class MinecraftBuilderApp(QMainWindow):
         self.scan_regions()
 
         # Centering player region automatically on world load after a small delay to let UI settle
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(50, self.go_to_player_region)
 
     def dimension_changed(self):
@@ -1271,7 +1374,7 @@ class MinecraftBuilderApp(QMainWindow):
                 player_pos = None
             if player_pos:
                 px, py, pz = player_pos
-                self.map_viewer.set_player_position(px, pz)
+                self.map_viewer.set_player_position(px, pz, getattr(self, "player_yaw", None))
                 self.log(f"Posizione giocatore trovata a X: {px:.1f}, Y: {py:.1f}, Z: {pz:.1f}")
             else:
                 self.map_viewer.set_player_position(None, None)
@@ -1303,8 +1406,17 @@ class MinecraftBuilderApp(QMainWindow):
         except (TypeError, ValueError):
             return str(value)
 
+    @staticmethod
+    def _yaw_of(nbt):
+        rot = nbt.get("Rotation") or []
+        try:
+            return float(rot[0]) if len(rot) >= 1 else None
+        except (TypeError, ValueError):
+            return None
+
     def _load_player_position(self):
         self.player_dimension = None
+        self.player_yaw = None
         try:
             # 1. Try reading level.dat Player pos (legacy or modded formats)
             level_path = os.path.join(self.current_world_path, "level.dat")
@@ -1316,6 +1428,7 @@ class MinecraftBuilderApp(QMainWindow):
                     pos_list = player.get("Pos", [])
                     if len(pos_list) >= 3:
                         self.player_dimension = self._dimension_id(player.get("Dimension", "minecraft:overworld"))
+                        self.player_yaw = self._yaw_of(player)
                         self.log(f"Coordinate giocatore lette da level.dat: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                         return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                 except Exception as e:
@@ -1352,6 +1465,7 @@ class MinecraftBuilderApp(QMainWindow):
                                 pos_list = p_nbt.get("Pos", [])
                                 if len(pos_list) >= 3:
                                     self.player_dimension = self._dimension_id(p_nbt.get("Dimension", "minecraft:overworld"))
+                                    self.player_yaw = self._yaw_of(p_nbt)
                                     self.log(f"Coordinate giocatore lette da {os.path.basename(p_dir)}/{player_uuid_str}.dat: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                                     return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                             except Exception as e:
@@ -1369,6 +1483,7 @@ class MinecraftBuilderApp(QMainWindow):
                             pos_list = p_nbt.get("Pos", [])
                             if len(pos_list) >= 3:
                                 self.player_dimension = self._dimension_id(p_nbt.get("Dimension", "minecraft:overworld"))
+                                self.player_yaw = self._yaw_of(p_nbt)
                                 self.log(f"Coordinate giocatore lette da {os.path.basename(p_dir)}/{os.path.basename(p_path)}: ({float(pos_list[0]):.1f}, {float(pos_list[1]):.1f}, {float(pos_list[2]):.1f})")
                                 return float(pos_list[0]), float(pos_list[1]), float(pos_list[2])
                         except Exception as e:
@@ -1447,6 +1562,153 @@ class MinecraftBuilderApp(QMainWindow):
             self.log(f"Mappa centrata sul giocatore a coordinate relative ({local_x:.1f}, {local_z:.1f})")
         else:
             self.log(f"Il file di regione {target_region_file} non esiste in questo mondo!")
+
+    # ------------------------------------------------------------------
+    # Live view: follow the player while playing
+    # ------------------------------------------------------------------
+    # F3+C in the game copies e.g. "/execute in minecraft:overworld run tp @s 12.50 64.00 -3.20 91.5 12.0"
+    _F3C_RE = re.compile(r"/execute in (\S+) run tp @s (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)(?: (-?[\d.]+))?")
+
+    def set_live_mode(self, on):
+        clipboard = QApplication.clipboard()
+        self.follow_cb.setEnabled(on)
+        self.auto_pos_cb.setEnabled(on)
+        if on:
+            self._live_stamp = None
+            self._live_info = "in attesa di un salvataggio del gioco o di F3+C"
+            self._auto_misses = 0
+            clipboard.dataChanged.connect(self.on_clipboard_changed)
+            self.live_timer.start()
+            self.auto_pos_timer.start()
+            if self.auto_pos_cb.isChecked():
+                self.log("Live attivo: mentre giochi la tua posizione si aggiorna ogni 2 secondi (F3+C automatico); "
+                         "il terreno nuovo compare quando Minecraft salva il mondo.")
+            else:
+                self.log("Live attivo: la mappa si aggiorna quando Minecraft salva il mondo (ogni 5 minuti circa). "
+                         "Per aggiornare subito la tua posizione premi F3+C nel gioco.")
+            self.live_tick()
+        else:
+            self.live_timer.stop()
+            self.auto_pos_timer.stop()
+            self._auto_pending = None
+            try:
+                clipboard.dataChanged.disconnect(self.on_clipboard_changed)
+            except TypeError:
+                pass
+            self.map_viewer.live_status = ""
+            self.map_viewer.update()
+
+    def _live_status_text(self):
+        tail = ("posizione continua attiva mentre giochi" if self.auto_pos_cb.isChecked()
+                else "F3+C nel gioco = posizione subito")
+        return f"LIVE  -  {self._live_info}  ({tail})"
+
+    def _player_files_stamp(self):
+        """Modification times of the files the player position is read from (changed when the game saves)."""
+        out = []
+        world = self.current_world_path or ""
+        for d in (world, os.path.join(world, "playerdata"), os.path.join(world, "players"),
+                  os.path.join(world, "players", "data")):
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        if e.name == "level.dat" or (d != world and e.name.endswith(".dat")):
+                            out.append((e.path, e.stat().st_mtime_ns))
+            except OSError:
+                continue
+        return tuple(sorted(out))
+
+    def live_tick(self):
+        if not self.current_world_path:
+            return
+        stamp = self._player_files_stamp()
+        if stamp != self._live_stamp:
+            first = self._live_stamp is None
+            self._live_stamp = stamp
+            pos = self.load_player_position(quiet=True)
+            if pos and self.player_dimension in (None, self.current_dimension_id()):
+                self._apply_live_position(pos[0], pos[1], pos[2], getattr(self, "player_yaw", None),
+                                          "dal salvataggio del gioco", announce=not first)
+        changed = self.map_viewer.refresh_changed_regions()
+        if changed:
+            self._live_info = f"{self._live_info.split('  |')[0]}  |  terreno aggiornato alle {time.strftime('%H:%M:%S')}"
+        self.map_viewer.live_status = self._live_status_text()
+        self.map_viewer.update()
+
+    def auto_locate(self):
+        """Live + continuous position: F3+C pressed for the player while they are in game."""
+        pending = self._auto_pending
+        if pending is not None:
+            if time.time() - pending[0] < 1.5:
+                return                      # still waiting for the game to copy the position
+            self._auto_pending = None       # no answer (e.g. reduced debug info): keys sent for nothing
+            self._auto_misses += 1
+            if self._auto_misses == 3:
+                self.log("Posizione continua: il gioco non risponde a F3+C (forse le informazioni di debug "
+                         "ridotte sono attive nel mondo). La posizione si aggiornera' ai salvataggi.")
+        if not self.auto_pos_cb.isChecked() or not self.current_world_path or not game_link.player_in_game():
+            return
+        # waiting before the keys go out: the game may copy the position before press_f3_c returns
+        self._auto_pending = (time.time(), self._clipboard_copy())
+        if not game_link.press_f3_c():
+            self._auto_pending = None
+
+    @staticmethod
+    def _clipboard_copy():
+        """Copy of what is in the clipboard now (all formats), to put back after an automatic F3+C."""
+        from PyQt6.QtCore import QMimeData
+        md = QApplication.clipboard().mimeData()
+        if md is None:
+            return None
+        out = QMimeData()
+        try:
+            for fmt in md.formats():
+                out.setData(fmt, md.data(fmt))
+        except Exception:
+            return None
+        return out
+
+    def on_clipboard_changed(self):
+        text = QApplication.clipboard().text() or ""
+        restored = getattr(self, "_clip_restored", None)
+        if restored is not None and time.time() < restored[0] and text == restored[1]:
+            return                          # our own restore of the player's clipboard, not a new position
+        m = self._F3C_RE.search(text[:300])
+        if not m or not self.current_world_path:
+            return
+        auto = self._auto_pending is not None and time.time() - self._auto_pending[0] < 3
+        if auto:
+            backup = self._auto_pending[1]
+            self._auto_pending = None
+            self._auto_misses = 0
+            if backup is not None:
+                # the player's clipboard back as it was (after this handler: not inside the change signal)
+                self._clip_restored = (time.time() + 3, backup.text() if backup.hasText() else "")
+                QTimer.singleShot(0, lambda: QApplication.clipboard().setMimeData(backup))
+        dim = self._dimension_id(m.group(1))
+        x, y, z = float(m.group(2)), float(m.group(3)), float(m.group(4))
+        yaw = float(m.group(5)) if m.group(5) else None
+        if dim != self.current_dimension_id():
+            if dim != self._live_other_dim:
+                self.log(f"F3+C: sei in un'altra dimensione ({dim}) rispetto a quella mostrata.")
+            self._live_other_dim = dim
+            return
+        self._live_other_dim = None
+        self._apply_live_position(x, y, z, yaw, "in tempo reale" if auto else "da F3+C", announce=not auto)
+
+    def _apply_live_position(self, x, y, z, yaw, source, announce=True):
+        self.map_viewer.set_player_position(x, z, yaw)
+        self.player_info_lbl.setText(f"Giocatore: X: {x:.1f}, Y: {y:.1f}, Z: {z:.1f}\n"
+                                     f"Regione: r.{int(x // 512)}.{int(z // 512)}.mca")
+        self.go_to_player_btn.setEnabled(True)
+        self._live_info = f"posizione {source} alle {time.strftime('%H:%M:%S')}"
+        self.map_viewer.live_status = self._live_status_text()
+        mv = self.map_viewer
+        if self.follow_cb.isChecked() and not (mv.is_panning or mv.is_dragging_structure or mv.edit_drag is not None):
+            mv.center_on_world(x, z)
+        if announce:
+            self.log(f"Live: giocatore a X {x:.0f}, Y {y:.0f}, Z {z:.0f} ({source}).")
+        mv.update()
 
     # Local structures management
     def load_local_templates(self, select=None):
@@ -1539,12 +1801,53 @@ class MinecraftBuilderApp(QMainWindow):
 
     def load_structure_file(self, file_path, name):
         try:
-            self.selected_structure = Structure.load(file_path)
+            big = os.path.getsize(file_path) > 15 * 2 ** 20
+        except OSError:
+            big = False
+        if not big:
+            try:
+                structure = Structure.load(file_path)
+            except Exception as e:
+                self._structure_load_failed(str(e))
+                return
+            self._structure_loaded(structure, name)
+            return
+        if getattr(self, "load_task", None) is not None:
+            return
+        # very large cuts: read and preview in the background, the window stays responsive
+        self.log(f"Caricamento di {name}: struttura molto grande, qualche secondo...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+        def job():
+            structure = Structure.load(file_path)
+            if getattr(structure.blocks, "packed", False):
+                self.map_viewer.packed_preview_image(structure)      # QImage only: fine off the GUI thread
+            return structure
+        self.load_task = BackgroundTask(job)
+        self.load_task.done.connect(lambda st: self._structure_loaded(st, name))
+        self.load_task.failed.connect(self._structure_load_failed)
+        self.load_task.finished.connect(self._structure_load_finished)
+        self.load_task.start()
+
+    def _structure_load_finished(self):
+        self.load_task = None
+        QApplication.restoreOverrideCursor()
+
+    def _structure_load_failed(self, msg):
+        self.log(f"Errore nel caricamento della struttura: {msg}")
+        self.selected_structure = None
+        self.map_viewer.set_selected_structure(None)
+        self.struct_info_box.setText("Errore di caricamento.")
+
+    def _structure_loaded(self, structure, name):
+        try:
+            self.selected_structure = structure
             self.selected_structure_name = name
             self.selected_rotation = 0
             self.map_viewer.set_selected_structure(self.selected_structure)
             
             self.update_structure_info()
+            self.load_water_settings()
             self.log(f"Caricata struttura {name} ({self.selected_structure.width}x{self.selected_structure.length}). R per ruotare.")
 
             modded = self.selected_structure.modded_blocks()
@@ -1568,21 +1871,27 @@ class MinecraftBuilderApp(QMainWindow):
     # Online search and download
     def search_online(self):
         query = self.search_input.text().strip()
-        if not query:
+        if not query or getattr(self, "online_task", None) is not None:
             return
-            
         self.log(f"Ricerca online per '{query}'...")
         self.online_list.clear()
-        
-        # Run scraper search
-        results = search_minecraft_schematics(query)
+        errors = []
+        self.online_task = BackgroundTask(lambda: search_minecraft_schematics(query, errors))
+        self.online_task.done.connect(lambda results: self.on_search_done(results, errors))
+        self.online_task.failed.connect(lambda msg: self.log(f"Ricerca non riuscita: {msg}"))
+        self.online_task.finished.connect(lambda: setattr(self, "online_task", None))
+        self.online_task.start()
+
+    def on_search_done(self, results, errors):
         for r in results:
             item = QListWidgetItem(f"{r['title']} [{r['category']}]")
-            # Store metadata in item custom user role
             item.setData(Qt.ItemDataRole.UserRole, r)
             self.online_list.addItem(item)
-            
-        self.log(f"Trovati {len(results)} risultati.")
+        if errors:
+            self.log(f"Il sito minecraft-schematics.com non risponde ({errors[0][:80]}): mostro solo i "
+                     f"{len(results)} risultati del catalogo integrato.")
+        else:
+            self.log(f"Trovati {len(results)} risultati.")
 
     def online_structure_selected(self):
         selected_items = self.online_list.selectedItems()
@@ -1621,13 +1930,24 @@ class MinecraftBuilderApp(QMainWindow):
         filename = safe[:60] + ext
         dest_path = os.path.join(self.templates_dir, filename)
         
+        if dl_url.startswith("local:") and os.path.exists(os.path.join(self.templates_dir, dl_url[6:])):
+            # built-in structure: it is already in the library, no duplicate
+            self.log(f"'{metadata['title']}' e' gia' nella libreria: la seleziono.")
+            self.tabs.setCurrentIndex(0)
+            self.load_local_templates(select=dl_url[6:])
+            return
+        if getattr(self, "download_task", None) is not None:
+            return
         self.log(f"Download in corso: {metadata['title']}...")
         self.download_btn.setEnabled(False)
-        QApplication.processEvents() # Refresh UI
-        
-        success = download_structure(dl_url, dest_path, self.templates_dir)
+        self.download_task = BackgroundTask(lambda: download_structure(dl_url, dest_path, self.templates_dir))
+        self.download_task.done.connect(lambda ok: self.on_download_done(ok, filename))
+        self.download_task.failed.connect(lambda msg: self.on_download_done(False, filename))
+        self.download_task.finished.connect(lambda: setattr(self, "download_task", None))
+        self.download_task.start()
+
+    def on_download_done(self, success, filename):
         self.download_btn.setEnabled(True)
-        
         if success:
             self.log(f"Download completato: salvato come {filename}")
             self.tabs.setCurrentIndex(0)
@@ -1702,6 +2022,8 @@ class MinecraftBuilderApp(QMainWindow):
             "name": s_name,
             "preview_pixmap": self.map_viewer.structure_preview_pixmap
         }
+        item_data["terrain"] = self.terrain_combo.currentData()
+        item_data["water_mode"] = self.water_combo.currentData()
         if getattr(structure_copy, "bridge", None) or self.bridge_style_of_selection():
             item_data["extend_columns"] = True  # bridge piers go down to the bottom
         self.add_staged(item_data, display_name)
@@ -1714,8 +2036,38 @@ class MinecraftBuilderApp(QMainWindow):
         
         self.check_injection_readiness()
 
+    @staticmethod
+    def _entry_boxes(entry):
+        boxes = []
+        for it in (entry["items"] if entry.get("kind") == "group" else [entry]):
+            s = it.get("structure")
+            if s is not None and it.get("name") != "lampione":
+                boxes.append((it["world_x"], it["world_z"], it["world_x"] + s.width - 1, it["world_z"] + s.length - 1))
+        return boxes
+
+    def _overlapping_entries(self, item):
+        """Titles of queued entries whose structures overlap the new one by a good part of its area."""
+        new_boxes = self._entry_boxes(item)
+        found = []
+        for row, entry in enumerate(self.staged_placements):
+            overlap = 0
+            for ax1, az1, ax2, az2 in new_boxes:
+                for bx1, bz1, bx2, bz2 in self._entry_boxes(entry):
+                    w = min(ax2, bx2) - max(ax1, bx1) + 1
+                    l = min(az2, bz2) - max(az1, bz1) + 1
+                    if w > 0 and l > 0:
+                        overlap += w * l
+            area = sum((x2 - x1 + 1) * (z2 - z1 + 1) for x1, z1, x2, z2 in new_boxes) or 1
+            if overlap >= max(9, area * 0.1):
+                found.append(self.staged_list.item(row).text() if self.staged_list.item(row) else entry.get("name", ""))
+        return found
+
     def add_staged(self, item, display_name, quiet=False):
         """Adds a placement (or a group of placements) to the injection queue."""
+        overlaps = self._overlapping_entries(item)
+        if overlaps:
+            self.log(f"Attenzione: '{display_name}' si sovrappone a {', '.join(overlaps[:3])} gia' in coda: "
+                     f"la struttura messa in coda dopo coprira' quella prima.")
         self.staged_placements.append(item)
         self.staged_list.addItem(display_name)
         self.map_viewer.staged_placements = self.staged_placements
@@ -1733,6 +2085,47 @@ class MinecraftBuilderApp(QMainWindow):
             else:
                 flat.append(item)
         return flat
+
+    BOAT_WORDS = ("ship", "boat", "nave", "navi", "barca", "galeon", "galleon", "yacht", "submarine", "sottomarin",
+                  "vessel", "caravel", "caravella", "longship", "drakkar", "pirate", "pirat", "gondola", "zattera",
+                  "raft", "ferry", "traghetto", "veliero", "battleship", "titanic")
+
+    def _water_key(self):
+        return "water/" + os.path.basename(self.selected_structure_name or "")
+
+    def load_water_settings(self):
+        """What the selected structure does on water: saved per structure, boats float by default."""
+        name = os.path.basename(self.selected_structure_name or "")
+        raw = self.settings.value(self._water_key(), None) if name else None
+        mode, depth = None, 0
+        if raw:
+            mode, _, d = str(raw).partition(":")
+            try:
+                depth = int(d or 0)
+            except ValueError:
+                depth = 0
+        if mode not in ("island", "float"):
+            stem = os.path.splitext(name)[0]
+            low = (stem + " " + getattr(self, "catalog_titles", {}).get(name, "")).lower()
+            boat = catalog.category_for(stem) == "Navi" or any(w in low for w in self.BOAT_WORDS)
+            mode = "float" if boat else "island"
+            s = self.selected_structure
+            depth = (2 if s is None or s.height <= 12 else 3) if boat else 0
+        self._loading_water = True
+        self.water_combo.setCurrentIndex(max(0, self.water_combo.findData(mode)))
+        self.depth_spin.setValue(depth)
+        self.depth_spin.setEnabled(mode == "float")
+        self._loading_water = False
+
+    def on_water_settings_changed(self):
+        mode = self.water_combo.currentData()
+        self.depth_spin.setEnabled(mode == "float")
+        if self._loading_water:
+            return
+        if self.selected_structure_name:
+            self.settings.setValue(self._water_key(), f"{mode}:{self.depth_spin.value()}")
+        if self.locked_placement and self.auto_y_checkbox.isChecked() and self.selected_structure:
+            self.y_spinbox.setValue(self.integrated_height(*self.locked_placement))
 
     def _ground_offset(self):
         return getattr(self.selected_structure, "ground_offset", 0) if self.selected_structure else 0
@@ -2027,7 +2420,11 @@ class MinecraftBuilderApp(QMainWindow):
             return
         info = plan["bridge"]
         heights = f"piano da Y {info.get('deck_a', info['deck'])} a Y {info.get('deck_b', info['deck'])}"
-        self.add_staged(plan, f"{plan['name']} (X {plan['world_x']}, Z {plan['world_z']}, {heights})")
+        label = f"{plan['name']} (X {plan['world_x']}, Z {plan['world_z']}, {heights})"
+        if plan.get("ramps"):
+            self.add_staged({"kind": "group", "items": [plan] + plan.pop("ramps"), "name": plan["name"]}, label)
+        else:
+            self.add_staged(plan, label)
         if plan["snapped"]:
             self.log("Il nuovo ponte prosegue quello esistente: stesso stile, stesso asse e stessa altezza.")
         if integrate:
@@ -2564,7 +2961,7 @@ class MinecraftBuilderApp(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             self.log("Ritaglio annullato.")
             return
-        title, mode, trees = dlg.values()
+        title, mode, trees, ambiguous, enclosures = dlg.values()
         if getattr(self, "cut_thread", None) is not None:
             self.log("Un ritaglio e' gia' in corso: attendi che finisca.")
             return
@@ -2573,7 +2970,7 @@ class MinecraftBuilderApp(QMainWindow):
         self.log(f"Ritaglio di {wx2 - wx1 + 1}x{wz2 - wz1 + 1} blocchi in corso in background"
                  + (" (area grande: ci vuole qualche decina di secondi)..." if area > 256 * 256 else "..."))
         self.cut_btn.setEnabled(False)
-        self.cut_thread = CutWorker(self.get_region_dir(), (wx1, wz1, wx2, wz2), mode, trees, path,
+        self.cut_thread = CutWorker(self.get_region_dir(), (wx1, wz1, wx2, wz2), mode, (trees, ambiguous, enclosures), path,
                                     {"source": world_name, "mode": mode, "area": f"{wx1},{wz1} {wx2},{wz2}"})
         self.cut_thread.progress.connect(self.on_cut_progress)
         self.cut_thread.done.connect(lambda info: self.on_cut_done(info, title, world_name, mode, path,
@@ -2609,6 +3006,139 @@ class MinecraftBuilderApp(QMainWindow):
     def on_cut_finished(self):
         self.cut_btn.setEnabled(True)
         self.cut_thread = None
+
+    # ------------------------------------------------------------------
+    # Queued structures edited on the map: select, move, rotate, duplicate, remove
+    # ------------------------------------------------------------------
+    def on_staged_selected(self, row):
+        self.staged_list.blockSignals(True)
+        self.staged_list.clearSelection()
+        if 0 <= row < self.staged_list.count():
+            self.staged_list.setCurrentRow(row)
+            self.staged_list.scrollToItem(self.staged_list.item(row))
+            if not getattr(self, "_staged_hint_shown", False):
+                self._staged_hint_shown = True
+                self.log("Struttura in coda selezionata: trascinala per spostarla, R per ruotarla, Canc per "
+                         "toglierla, Ctrl+D per metterne un'altra (anche col tasto destro). Esc per deselezionare.")
+        self.staged_list.blockSignals(False)
+
+    def on_staged_list_selection(self):
+        rows = [self.staged_list.row(i) for i in self.staged_list.selectedItems()]
+        entry = self.staged_placements[rows[0]] if len(rows) == 1 and rows[0] < len(self.staged_placements) else None
+        self.map_viewer.select_staged(entry, emit=False)
+
+    @staticmethod
+    def _movable(entry):
+        """None if a queued entry can be moved on the map, else why not."""
+        items = entry["items"] if entry.get("kind") == "group" else [entry]
+        if any(it.get("line_record") or it.get("line_id") for it in items):
+            return "mura e strade si cambiano con 'Modifica' nelle loro schede"
+        if any(it.get("extend_columns") or it.get("bridge") or it.get("kind") == "demolish" for it in items):
+            return "ponti e demolizioni dipendono dal punto in cui sono stati disegnati"
+        return None
+
+    def _staged_label(self, entry):
+        if entry.get("kind") == "group":
+            return entry.get("name", "")
+        title = getattr(self, "catalog_titles", {}).get(entry["name"], entry["name"])
+        return f"{title} (X {entry['world_x']}, Y {entry['y_coord']}, Z {entry['world_z']})"
+
+    def _height_for(self, structure, wx, wz):
+        """Y that fits a structure at a world position (same rules as the placement)."""
+        saved = self.selected_structure
+        try:
+            self.selected_structure = structure
+            return self.integrated_height(wx - self.current_region.rx * 512, wz - self.current_region.rz * 512)
+        finally:
+            self.selected_structure = saved
+
+    def _refresh_staged(self, row, select=True):
+        entry = self.staged_placements[row]
+        item = self.staged_list.item(row)
+        if item is not None:
+            item.setText(self._staged_label(entry))
+        self.map_viewer.staged_placements = self.staged_placements
+        if select:
+            self.map_viewer.select_staged(entry)
+        self.map_viewer.update()
+
+    def move_staged(self, row, dx, dz):
+        if not 0 <= row < len(self.staged_placements):
+            return
+        entry = self.staged_placements[row]
+        why = self._movable(entry)
+        if why:
+            self.log(f"Non si sposta trascinando: {why}.")
+            return
+        items = entry["items"] if entry.get("kind") == "group" else [entry]
+        follow = self.auto_y_checkbox.isChecked() and self.current_region is not None
+        for it in items:
+            if it.get("kind") == "path":
+                it["cells"] = [(x + dx, z + dz) for x, z in it.get("cells", ())]
+                continue
+            if "world_x" not in it:
+                continue
+            it["world_x"] += dx
+            it["world_z"] += dz
+            if follow and it.get("structure") is not None and it.get("name") != "lampione":
+                it["y_coord"] = self._height_for(it["structure"], it["world_x"], it["world_z"])
+        self._refresh_staged(row)
+        self.log(f"Spostata in coda: {self._staged_label(entry)}")
+
+    def on_staged_action(self, row, action):
+        if not 0 <= row < len(self.staged_placements):
+            return
+        entry = self.staged_placements[row]
+        if action == "remove":
+            self.staged_placements.pop(row)
+            self.staged_list.takeItem(row)
+            self.map_viewer.staged_placements = self.staged_placements
+            self.map_viewer.select_staged(None, emit=False)
+            self.log(f"Rimossa dalla coda: {entry.get('name', '')}")
+            self.check_injection_readiness()
+            return
+        if action == "rotate":
+            if entry.get("kind") == "group" or entry.get("structure") is None or self._movable(entry):
+                self.log("Si possono ruotare solo le singole strutture in coda.")
+                return
+            old = entry["structure"]
+            new = old.rotate(90)
+            # turn around the centre, so the structure stays where it was
+            cx, cz = entry["world_x"] + old.width / 2, entry["world_z"] + old.length / 2
+            entry["structure"] = new
+            entry["world_x"] = int(round(cx - new.width / 2))
+            entry["world_z"] = int(round(cz - new.length / 2))
+            entry["preview_pixmap"] = None
+            if self.auto_y_checkbox.isChecked() and self.current_region is not None:
+                entry["y_coord"] = self._height_for(new, entry["world_x"], entry["world_z"])
+            self._refresh_staged(row)
+            self.log(f"Ruotata in coda: {self._staged_label(entry)}")
+            return
+        if action == "duplicate":
+            import copy
+            why = self._movable(entry)
+            if why:
+                self.log(f"Non si duplica: {why}.")
+                return
+            twin = copy.copy(entry)
+            if entry.get("kind") == "group":
+                twin["items"] = [copy.copy(it) for it in entry["items"]]
+            items = twin["items"] if twin.get("kind") == "group" else [twin]
+            boxes = [(it["world_x"], it["world_x"] + it["structure"].width) for it in items
+                     if it.get("structure") is not None]
+            shift = (max(b for _, b in boxes) - min(a for a, _ in boxes) + 3) if boxes else 8
+            for it in items:
+                if it.get("kind") == "path":
+                    it["cells"] = [(x + shift, z) for x, z in it.get("cells", ())]
+                elif "world_x" in it:
+                    it["world_x"] += shift
+                    if it.get("structure") is not None and self.auto_y_checkbox.isChecked() and it.get(
+                            "name") != "lampione":
+                        it["y_coord"] = self._height_for(it["structure"], it["world_x"], it["world_z"])
+            self.add_staged(twin, self._staged_label(twin), quiet=True)
+            self._refresh_staged(len(self.staged_placements) - 1)
+            self.on_staged_selected(len(self.staged_placements) - 1)
+            self.log(f"Messa in coda un'altra copia: {self._staged_label(twin)} (trascinala dove vuoi).")
 
     def remove_selected_staged(self):
         selected_rows = [self.staged_list.row(item) for item in self.staged_list.selectedItems()]
@@ -2695,14 +3225,30 @@ class MinecraftBuilderApp(QMainWindow):
         if getattr(self, "terrain", None) is None:
             self.terrain = WorldTerrain(self._edit_world())
         s = self.selected_structure
+        if s.width * s.length > 256 * 256:
+            # very large structures (big cuts): a few thousand samples of the map heights, no chunk decoding
+            step = max(1, int((s.width * s.length / 4000) ** 0.5))
+            heights = sorted(h for h in (self.map_viewer.height_at(grid_x + bx, grid_z + bz)
+                                         for bx in range(0, s.width, step) for bz in range(0, s.length, step))
+                             if h is not None)
+            if not heights:
+                return 64
+            return heights[min(len(heights) - 1, (len(heights) * 3) // 4)] + 1 - self._ground_offset()
         x1, z1 = self._world_of(grid_x, grid_z)
-        heights = []
+        heights, water = [], []
         step = 2 if max(s.width, s.length) > 16 else 1
         for x in range(x1, x1 + s.width, step):
             for z in range(z1, z1 + s.length, step):
                 h = self.terrain.height(x, z)
-                if h is not None and not self.terrain.is_water(x, z):
-                    heights.append(h)
+                if h is None:
+                    continue
+                (water if self.terrain.is_water(x, z) else heights).append(h)
+        if water and len(water) >= 0.3 * (len(water) + len(heights)):
+            # on water: a boat floats with its chosen draught, anything else sits on a dry island
+            level = max(set(water), key=water.count)
+            if self.water_combo.currentData() == "float":
+                return level + 1 - self.depth_spin.value()
+            return level + 2 - self._ground_offset()
         if not heights:
             return self.get_average_footprint_height(grid_x, grid_z)
         heights.sort()
@@ -2935,7 +3481,7 @@ class MinecraftBuilderApp(QMainWindow):
             placements_to_inject,
             fill_foundations=self.fill_foundation_checkbox.isChecked(),
             clear_terrain=self.clear_terrain_checkbox.isChecked(),
-            blend=self.blend_checkbox.isChecked(),
+            blend=self.terrain_combo.currentData(),
             skip_modded=self.skip_modded_checkbox.isChecked()
         )
         self.injection_thread.progress.connect(self.log)
@@ -3050,8 +3596,25 @@ class MinecraftBuilderApp(QMainWindow):
         self.update_undo_button()
 
     def closeEvent(self, event):
+        self.live_timer.stop()
         self.map_viewer.shutdown()
         super().closeEvent(event)
+
+
+class BackgroundTask(QThread):
+    """Runs a function outside the GUI thread (network searches and downloads)."""
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self.fn())
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 class CutWorker(QThread):
@@ -3062,7 +3625,9 @@ class CutWorker(QThread):
 
     def __init__(self, region_dir, box, mode, trees, path, extra):
         super().__init__()
-        self.region_dir, self.box, self.mode, self.trees = region_dir, box, mode, trees
+        self.region_dir, self.box, self.mode = region_dir, box, mode
+        opts = tuple(trees) if isinstance(trees, tuple) else (trees,)
+        self.trees, self.ambiguous, self.enclosures = (opts + (False, False, True)[len(opts):])[:3]
         self.path, self.extra = path, extra
 
     def run(self):
@@ -3070,7 +3635,8 @@ class CutWorker(QThread):
             # a World of its own: the chunks are released while reading, the map is not affected
             world = World(self.region_dir)
             struct, info = world_extractor.extract_area(
-                world, *self.box, mode=self.mode, include_trees=self.trees,
+                world, *self.box, mode=self.mode, include_trees=self.trees, keep_ambiguous=self.ambiguous,
+                enclosures=self.enclosures,
                 progress=lambda d, t: self.progress.emit(d, t), cancelled=self.isInterruptionRequested)
             del world
             world_extractor.save_structure(struct, self.path, self.extra)
@@ -3101,6 +3667,20 @@ class CutDialog(QDialog):
         form.addRow("Cosa copiare:", self.mode_combo)
         self.trees_check = QCheckBox("Includi gli alberi")
         form.addRow("", self.trees_check)
+        self.enclosure_check = QCheckBox("Tieni il terreno racchiuso dalla costruzione (cortili, campi, giardini)")
+        self.enclosure_check.setChecked(True)
+        self.enclosure_check.setToolTip(
+            "Il prato di un cortile, il campo di uno stadio, l'aiuola di un giardino chiuso da mura o recinti vengono "
+            "copiati con la costruzione (solo lo strato in superficie, con fiori e alberi). Fuori dalla costruzione "
+            "il terreno resta quello della nuova mappa.")
+        form.addRow("", self.enclosure_check)
+        self.ambiguous_check = QCheckBox("Tieni anche neve compatta, terracotta e ghiaccio")
+        self.ambiguous_check.setToolTip(
+            "Questi blocchi sono anche il terreno naturale di alcuni biomi (cime innevate, badlands): di solito "
+            "vengono lasciati fuori, a meno che non poggino sulla costruzione o ne facciano da soffitto. Spunta se "
+            "la costruzione e' fatta di questi blocchi (igloo, case di terracotta): vengono tenuti quelli che "
+            "poggiano sul terreno, quindi in quei biomi verra' copiato anche un po' di terreno.")
+        form.addRow("", self.ambiguous_check)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -3108,7 +3688,7 @@ class CutDialog(QDialog):
 
     def values(self):
         return (self.title_edit.text().strip() or "Ritaglio", self.mode_combo.currentData(),
-                self.trees_check.isChecked())
+                self.trees_check.isChecked(), self.ambiguous_check.isChecked(), self.enclosure_check.isChecked())
 
 
 def _path_from_args(args):

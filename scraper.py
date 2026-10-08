@@ -130,7 +130,7 @@ def _load_builtin_catalog():
 
 CURATED_ONLINE_CATALOG += _load_builtin_catalog()
 
-def search_minecraft_schematics(query):
+def search_minecraft_schematics(query, errors=None):
     """
     Scrapes minecraft-schematics.com for creations matching the query.
     Returns metadata list (titles, links, categories).
@@ -212,7 +212,9 @@ def search_minecraft_schematics(query):
                         })
     except Exception as e:
         print(f"Scraper web connection error: {e}")
-        
+        if errors is not None:
+            errors.append(str(e))
+
     return results
 
 def download_structure(url, dest_path, templates_dir):

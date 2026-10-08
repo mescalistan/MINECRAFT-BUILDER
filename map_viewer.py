@@ -4,7 +4,7 @@ import threading
 import time
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QTransform, QFont, QBrush, QFontMetrics
+from PyQt6.QtGui import QPainter, QColor, QImage, QPixmap, QPen, QTransform, QFont, QBrush, QFontMetrics, QPolygonF
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QTimer, QThread
 
 import map_tiles
@@ -26,7 +26,10 @@ GAME_STRUCTURE_COLOR = QColor(0, 229, 255)
 class TileLoader(QThread):
     """
     Renders region tiles in the background, nearest to the view first.
-    Each tile comes first as a quick height map, then in detail (cached on disk).
+    A region already seen comes straight from the disk cache (if the game changed it since, the
+    old picture is shown at once and only the changed chunks are redrawn); a new region comes
+    first as a quick height map and then in detail, the quick pictures of all the requested
+    regions before the detailed ones.
     """
     tile_ready = pyqtSignal(int, int, object)
 
@@ -35,22 +38,39 @@ class TileLoader(QThread):
         self.region_dir = region_dir
         self.cache = map_tiles.TileCache(region_dir)
         self._cond = threading.Condition()
-        self._queue = {}          # (rx, rz) -> (priority, path)
+        self._queue = {}          # (rx, rz) -> [priority, path, stage]; stage 0 = first picture, 1 = detailed
         self._stop = False
         self._paused = False
         self.busy = 0
 
+    @staticmethod
+    def worker_count():
+        return max(1, min(10, (os.cpu_count() or 2) - 2))
+
     def request(self, rx, rz, path, priority):
         with self._cond:
             old = self._queue.get((rx, rz))
-            if old is None or priority < old[0]:
-                self._queue[(rx, rz)] = (priority, path)
-                self._cond.notify()
+            if old is None:
+                self._queue[(rx, rz)] = [priority, path, 0]
+            elif priority < old[0]:
+                old[0] = priority
+            self._cond.notify()
+
+    def _requeue(self, key, path, stage, priority):
+        with self._cond:
+            if self._stop:
+                return
+            old = self._queue.get(key)
+            if old is None:
+                self._queue[key] = [priority, path, stage]
+            else:
+                old[0] = min(old[0], priority)
+            self._cond.notify()
 
     def reprioritize(self, fn):
         with self._cond:
-            for key, (_, path) in list(self._queue.items()):
-                self._queue[key] = (fn(*key), path)
+            for key, entry in self._queue.items():
+                entry[0] = fn(*key)
 
     def pending(self):
         with self._cond:
@@ -72,9 +92,28 @@ class TileLoader(QThread):
         with self._cond:
             if self._stop or self._paused or not self._queue:
                 return None
-            key = min(self._queue, key=lambda k: self._queue[k][0])
-            _, path = self._queue.pop(key)
-            return key, path
+            key = min(self._queue, key=lambda k: (self._queue[k][2], self._queue[k][0]))
+            priority, path, stage = self._queue.pop(key)
+            return key, path, stage, priority
+
+    def _first_picture(self, rx, rz, path, priority):
+        """
+        From the disk cache if possible: True if nothing else is needed. A tile of an older version
+        of the file is shown anyway while the detailed render (changed chunks only) is queued.
+        """
+        tile, stamp = self.cache.load_any(rx, rz)
+        if tile is None:
+            return False
+        try:
+            fresh = stamp == map_tiles.TileCache._stamp(path)
+        except OSError:
+            fresh = False
+        payload = {"image": tile["image"], "heights": tile["heights"], "structures": tile["structures"],
+                   "detailed": True, "complete": True, "stamp": stamp, "stale": not fresh}
+        self.tile_ready.emit(rx, rz, payload)
+        if not fresh:
+            self._requeue((rx, rz), path, 1, priority)
+        return True
 
     def run(self):
         """
@@ -82,7 +121,7 @@ class TileLoader(QThread):
         threads would not help); the first pass is the quick height map, then the detailed one.
         """
         from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
-        workers = max(1, min(4, (os.cpu_count() or 2) - 1))
+        workers = self.worker_count()
         cache_root = self.cache.dir and os.path.dirname(self.cache.dir)
         try:
             pool = ProcessPoolExecutor(max_workers=workers)
@@ -95,18 +134,15 @@ class TileLoader(QThread):
                     job = self._take()
                     if job is None:
                         break
-                    (rx, rz), path = job
-                    cached = self.cache.load(rx, rz, path)
-                    if cached is not None:
-                        self._emit_tile(rx, rz, cached)
+                    (rx, rz), path, stage, priority = job
+                    if stage == 0 and self._first_picture(rx, rz, path, priority):
                         continue
                     if pool is None:
-                        self._render_here(rx, rz, path)
+                        self._render_here(rx, rz, path, stage)
                         continue
-                    for detailed in (False, True):
-                        fut = pool.submit(map_tiles.render_job, path, rx, rz, self.region_dir, detailed, cache_root)
-                        running[fut] = (rx, rz)
-                self.busy = len({v for v in running.values()})
+                    fut = pool.submit(map_tiles.render_job, path, rx, rz, self.region_dir, stage == 1, cache_root)
+                    running[fut] = (rx, rz, path, stage, priority)
+                self.busy = len(running)
                 if not running:
                     with self._cond:
                         if not self._stop and (self._paused or not self._queue):
@@ -114,32 +150,31 @@ class TileLoader(QThread):
                     continue
                 done, _ = wait(list(running), timeout=0.3, return_when=FIRST_COMPLETED)
                 for fut in done:
-                    rx, rz = running.pop(fut)
+                    rx, rz, path, stage, priority = running.pop(fut)
                     try:
                         payload = fut.result()
                     except Exception as e:  # file being rewritten, corrupted chunk...: retry later
                         print(f"Mappa: impossibile leggere r.{rx}.{rz}: {e}")
                         payload = None
-                    if not self._stop:
-                        self.tile_ready.emit(rx, rz, payload)
+                    if self._stop:
+                        break
+                    self.tile_ready.emit(rx, rz, payload)
+                    if stage == 0 and payload is not None:
+                        self._requeue((rx, rz), path, 1, priority)
         finally:
             self.busy = 0
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
 
-    def _emit_tile(self, rx, rz, tile):
-        payload = {"image": map_tiles.shade(tile), "heights": tile["heights"],
-                   "structures": tile["structures"], "detailed": tile["detailed"]}
-        self.tile_ready.emit(rx, rz, payload)
-
-    def _render_here(self, rx, rz, path):
+    def _render_here(self, rx, rz, path, stage):
         try:
-            for detailed in (False, True):
-                payload = map_tiles.render_job(path, rx, rz, self.region_dir, detailed,
-                                               os.path.dirname(self.cache.dir))
-                if self._stop:
-                    return
-                self.tile_ready.emit(rx, rz, payload)
+            payload = map_tiles.render_job(path, rx, rz, self.region_dir, stage == 1,
+                                           os.path.dirname(self.cache.dir))
+            if self._stop:
+                return
+            self.tile_ready.emit(rx, rz, payload)
+            if stage == 0 and payload is not None:
+                self._requeue((rx, rz), path, 1, 0)
         except Exception as e:
             print(f"Mappa: impossibile leggere r.{rx}.{rz}: {e}")
             self.tile_ready.emit(rx, rz, None)
@@ -158,6 +193,9 @@ class MapViewer(QWidget):
     game_structures_changed = pyqtSignal()             # a rendered tile brought new game structures
     polygon_finished = pyqtSignal(object, bool)        # grid points of a drawn perimeter, closed?
     preview_edited = pyqtSignal(object)                # grid points of the perimeter/road after an edit
+    staged_selected = pyqtSignal(int)                  # row of the queued entry clicked on the map (-1: none)
+    staged_moved = pyqtSignal(int, int, int)           # row, dx, dz (blocks) after dragging a queued entry
+    staged_action = pyqtSignal(int, str)               # row, "rotate" / "remove" / "duplicate"
 
     MIN_ZOOM = 0.04
     MAX_ZOOM = 32.0
@@ -178,7 +216,7 @@ class MapViewer(QWidget):
         self.region = None
         self.region_dir = None
         self.regions = {}          # (rx, rz) -> region file path
-        self.tiles = {}            # (rx, rz) -> {"pixmap", "heights", "detailed", "structures", "stale"}
+        self.tiles = {}            # (rx, rz) -> {"pixmap", "small", "heights", "detailed", "structures", "stamp", "stale"}
         self.requested = set()
         self.failed = {}           # (rx, rz) -> time of the failure (retried after a while)
         self.loader = None
@@ -194,6 +232,9 @@ class MapViewer(QWidget):
         # Player marker state
         self.player_x = None
         self.player_z = None
+        self.player_yaw = None       # degrees, Minecraft convention (0 = south, 90 = west)
+        self.player_trail = []       # recent positions (world x, z), drawn in live mode
+        self.live_status = ""        # HUD line of the live view ("" = off)
 
         # Structure preview & drag state
         self.selected_structure = None
@@ -206,6 +247,9 @@ class MapViewer(QWidget):
         self.is_locked = False
         self.structure_preview_pixmap = None
         self.staged_placements = []
+        self.selected_staged = None   # queued entry selected on the map (moved, rotated, removed from here)
+        self.staged_drag = None       # [entry, start grid x, start grid z, dx, dz] while dragging it
+        self.press = None             # (screen pos, grid x, grid z) of a left press that may become a pan
         # Interaction mode: "place" (structures), "bridge" (click the two banks), "select" (drag an area)
         self.mode = "place"
         self.bridge_start = None
@@ -279,6 +323,7 @@ class MapViewer(QWidget):
         self.regions = {}
         self._sync_regions.clear()
         self._sync_heights.clear()
+        self.player_trail = []
         if region_dir:
             self.loader = TileLoader(region_dir, self)
             self.loader.tile_ready.connect(self.on_tile_ready)
@@ -311,25 +356,35 @@ class MapViewer(QWidget):
         """Compatibility with the old single-region map: refresh everything."""
         self.invalidate()
 
+    THUMB = 128                    # side of the small copy of each tile, drawn when zoomed out
+    THUMB_ZOOM = 0.375             # below this zoom the small copies are enough
+
     def on_tile_ready(self, rx, rz, payload):
         key = (rx, rz)
         if payload is None:
             self.requested.discard(key)
             self.failed[key] = time.time()
             return
-        img = QImage(payload["image"], TILE, TILE, TILE * 4, QImage.Format.Format_ARGB32).copy()
         old = self.tiles.get(key)
+        if not payload["detailed"] and old and old.get("detailed") and not old.get("stale"):
+            return                 # never replace a detailed tile with a quick one
+        img = QImage(payload["image"], TILE, TILE, TILE * 4, QImage.Format.Format_ARGB32).copy()
+        stale = bool(payload.get("stale"))
+        complete = payload.get("complete", True)
         self.tiles[key] = {
             "pixmap": QPixmap.fromImage(img),
+            "small": QPixmap.fromImage(img.scaled(self.THUMB, self.THUMB, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                                  Qt.TransformationMode.SmoothTransformation)),
             "heights": payload["heights"],
             "detailed": payload["detailed"],
             "structures": payload["structures"],
-            "stale": False,
+            "stamp": payload.get("stamp"),
+            "stale": stale or not complete,
         }
-        if payload["detailed"]:
+        if payload["detailed"] and not stale:
             self.requested.discard(key)
-        elif old and old.get("detailed") and not old.get("stale"):
-            self.tiles[key] = old  # never replace a detailed tile with a quick one
+            if not complete:       # read while the game was writing it: read again in a while
+                self.failed[key] = time.time()
         self._sync_heights = {k: v for k, v in self._sync_heights.items() if (k[0], k[1]) != key}
         if payload["detailed"] and payload["structures"] != ((old or {}).get("structures") or []):
             self.game_structures_changed.emit()
@@ -337,12 +392,43 @@ class MapViewer(QWidget):
         self.update()
 
     def _evict(self, keep=160):
-        if len(self.tiles) <= keep:
+        """Far tiles keep only their small copy (enough when zoomed out) and come back from the cache."""
+        full = [k for k, t in self.tiles.items() if t.get("pixmap") is not None]
+        if len(full) <= keep:
             return
         cx, cz = self.view_center_region()
-        far = sorted(self.tiles, key=lambda k: -((k[0] - cx) ** 2 + (k[1] - cz) ** 2))
-        for k in far[:len(self.tiles) - keep]:
-            del self.tiles[k]  # will come back from the disk cache when needed
+        full.sort(key=lambda k: -((k[0] - cx) ** 2 + (k[1] - cz) ** 2))
+        for k in full[:len(full) - keep]:
+            t = self.tiles[k]
+            t["pixmap"] = None
+            t["heights"] = None
+
+    def refresh_changed_regions(self):
+        """
+        Live view: region files the game has saved again (or new ones) are redrawn; only the
+        changed chunks are read. Returns how many regions changed.
+        """
+        if not self.region_dir or not self.loader:
+            return 0
+        regions = map_tiles.list_regions(self.region_dir)
+        changed = 0
+        for key, path in regions.items():
+            tile = self.tiles.get(key)
+            if key not in self.regions:
+                changed += 1
+            elif tile is not None and tile.get("stamp") is not None and not tile["stale"]:
+                try:
+                    stamp = map_tiles.TileCache._stamp(path)
+                except OSError:
+                    continue
+                if stamp != tile["stamp"]:
+                    tile["stale"] = True
+                    self.requested.discard(key)
+                    changed += 1
+        self.regions = regions
+        if changed:
+            self.request_visible_tiles()
+        return changed
 
     def _view_transform(self):
         t = QTransform()
@@ -369,10 +455,11 @@ class MapViewer(QWidget):
         ax, az = self.anchor
         x1, x2 = int(rect.left() // TILE) - 1, int(rect.right() // TILE) + 1
         z1, z2 = int(rect.top() // TILE) - 1, int(rect.bottom() // TILE) + 1
-        if (x2 - x1 + 1) * (z2 - z1 + 1) > 400:  # extremely zoomed out: only the regions near the centre
+        if (x2 - x1 + 1) * (z2 - z1 + 1) > 1600:  # extremely zoomed out: only the regions near the centre
             c = rect.center()
             mx, mz = int(c.x() // TILE), int(c.y() // TILE)
-            x1, x2, z1, z2 = mx - 10, mx + 10, mz - 10, mz + 10
+            x1, x2, z1, z2 = mx - 20, mx + 20, mz - 20, mz + 20
+        thumbs = self.zoom_level < self.THUMB_ZOOM
         c = rect.center()
         ccx, ccz = c.x() / TILE - 0.5, c.y() / TILE - 0.5
 
@@ -387,7 +474,7 @@ class MapViewer(QWidget):
                 if not path or key in self.requested:
                     continue
                 tile = self.tiles.get(key)
-                if tile and tile["detailed"] and not tile["stale"]:
+                if tile and tile["detailed"] and not tile["stale"] and (tile["pixmap"] is not None or thumbs):
                     continue
                 if now - self.failed.get(key, 0) < 5:
                     continue
@@ -405,7 +492,7 @@ class MapViewer(QWidget):
         key = (wx // TILE, wz // TILE)
         lx, lz = wx - key[0] * TILE, wz - key[1] * TILE
         tile = self.tiles.get(key)
-        if tile is not None:
+        if tile is not None and tile.get("heights") is not None:
             y = tile["heights"][lz * TILE + lx]
             return None if y == map_tiles.NO_DATA else y
         heights = self._chunk_heights_sync(key, lx // 16, lz // 16)
@@ -469,6 +556,8 @@ class MapViewer(QWidget):
 
     def structure_pixmap(self, structure):
         """Top-down picture of a structure (one pixel per column, colour of the top block)."""
+        if getattr(structure.blocks, "packed", False):
+            return self._packed_pixmap(structure)
         top = {}
         for (x, y, z), block in structure.blocks.items():
             name = block.get("Name", "minecraft:air")
@@ -479,6 +568,60 @@ class MapViewer(QWidget):
         for (x, z), (_, name) in top.items():
             img.setPixelColor(x, z, self.get_block_color(name))
         return QPixmap.fromImage(img)
+
+    def _packed_pixmap(self, structure):
+        """Very large structures: cached top-down image; a rotation just turns the image."""
+        img = self.packed_preview_image(structure)
+        if structure.blocks.rot:
+            img = img.transformed(QTransform().rotate(90 * structure.blocks.rot))
+        return QPixmap.fromImage(img)
+
+    def packed_preview_image(self, structure):
+        """
+        Top block of every column read from the packed arrays (not rotated), cached in memory and on
+        disk: the first time it takes a few seconds. Only QImage: it can run in a worker thread.
+        """
+        import hashlib
+        from array import array
+        pb = structure.blocks
+        source = getattr(structure, "preview_source", (None, 0))[0]
+        cache = getattr(self, "_packed_previews", None)
+        if cache is None:
+            cache = self._packed_previews = {}
+        img = cache.get(source) if source else None
+        disk = None
+        if img is None and source:
+            folder = os.path.join(map_tiles.default_cache_root(), "previews")
+            disk = os.path.join(folder, hashlib.sha1(source.encode("utf-8")).hexdigest()[:20] + ".png")
+            if os.path.exists(disk):
+                loaded = QImage(disk)
+                if not loaded.isNull() and loaded.width() == pb.base_w and loaded.height() == pb.base_l:
+                    img = loaded
+        if img is None:
+            W, L = max(pb.base_w, 1), max(pb.base_l, 1)
+            air = [b.get("Name", "").endswith("air") for b in pb.states]
+            low = -(1 << 30)
+            ty = array("i", [low]) * (W * L)
+            ts = array("i", [-1]) * (W * L)
+            for x, y, z, s in zip(pb.xs, pb.ys, pb.zs, pb.si):
+                if air[s]:
+                    continue
+                c = z * W + x
+                if y >= ty[c]:
+                    ty[c] = y
+                    ts[c] = s
+            colors = [self.get_block_color(b.get("Name", "minecraft:air")).rgba() for b in pb.states]
+            pixels = array("I", [colors[s] if s >= 0 else 0 for s in ts])
+            img = QImage(pixels.tobytes(), W, L, W * 4, QImage.Format.Format_ARGB32).copy()
+            if disk:
+                try:
+                    os.makedirs(os.path.dirname(disk), exist_ok=True)
+                    img.save(disk, "PNG")
+                except OSError:
+                    pass
+        if source:
+            cache[source] = img
+        return img
 
     def precompute_structure_preview(self):
         self.structure_preview_pixmap = self.structure_pixmap(self.selected_structure) if self.selected_structure else None
@@ -531,9 +674,22 @@ class MapViewer(QWidget):
         self.precompute_structure_preview()
         self.update()
 
-    def set_player_position(self, px, pz):
+    def set_player_position(self, px, pz, yaw=None):
+        if px is None or pz is None:
+            self.player_trail = []
+        elif not self.player_trail or abs(self.player_trail[-1][0] - px) + abs(self.player_trail[-1][1] - pz) > 1:
+            self.player_trail.append((px, pz))
+            del self.player_trail[:-400]
         self.player_x = px
         self.player_z = pz
+        self.player_yaw = yaw
+        self.update()
+
+    def center_on_world(self, wx, wz):
+        """Moves the view (not the zoom) so that a world position is in the middle."""
+        ax, az = self.anchor
+        self.pan_offset = QPointF(256 - (wx - ax * TILE), 256 - (wz - az * TILE))
+        self.request_visible_tiles()
         self.update()
 
     def get_color_for_height(self, y):
@@ -568,13 +724,18 @@ class MapViewer(QWidget):
         x1, x2 = int(visible.left() // TILE), int(visible.right() // TILE)
         z1, z2 = int(visible.top() // TILE), int(visible.bottom() // TILE)
         missing = False
+        thumbs = z < self.THUMB_ZOOM
         for gx in range(x1, x2 + 1):
             for gz in range(z1, z2 + 1):
                 key = (ax + gx, az + gz)
                 ox, oz = gx * TILE, gz * TILE
                 tile = self.tiles.get(key)
-                if tile:
+                if tile and tile["pixmap"] is not None and not thumbs:
                     painter.drawPixmap(ox, oz, tile["pixmap"])
+                elif tile:
+                    small = tile["small"]
+                    painter.drawPixmap(QRectF(ox, oz, TILE, TILE), small, QRectF(small.rect()))
+                    missing = missing or not thumbs
                 elif key in self.regions:
                     missing = True
                     painter.fillRect(QRectF(ox, oz, TILE, TILE), QColor(32, 32, 38))
@@ -658,13 +819,22 @@ class MapViewer(QWidget):
                     item["preview_pixmap"] = self.structure_pixmap(item["structure"])
                 s = item["structure"]
                 gx, gz = self._grid_of_world(item["world_x"], item["world_z"])
+                owner = item if any(e is item for e in self.staged_placements) else next(
+                    (e for e in self.staged_placements if e.get("kind") == "group" and any(
+                        i is item for i in e["items"])), None)
+                if self.staged_drag is not None and self.staged_drag[0] is owner:
+                    gx, gz = gx + self.staged_drag[3], gz + self.staged_drag[4]
                 rect = QRectF(gx, gz, s.width, s.length)
                 if not rect.intersects(visible):
                     continue
                 painter.setOpacity(0.8)
                 painter.drawPixmap(rect.toRect(), item["preview_pixmap"])
                 painter.setOpacity(1.0)
-                painter.setPen(QPen(QColor(255, 255, 255, 200), 0, Qt.PenStyle.DashLine))
+                if owner is not None and owner is self.selected_staged:
+                    painter.fillRect(rect, QColor(241, 196, 15, 45))
+                    painter.setPen(QPen(QColor(241, 196, 15, 255), max(1.5 / z, 0.15)))
+                else:
+                    painter.setPen(QPen(QColor(255, 255, 255, 200), 0, Qt.PenStyle.DashLine))
                 painter.drawRect(rect)
                 labels.append((transform.map(QPointF(rect.left(), rect.bottom())),
                                f"{item['name']} (Y:{item['y_coord']}) - da iniettare", QColor(220, 220, 220), False,
@@ -714,9 +884,26 @@ class MapViewer(QWidget):
             gx, gz = self.player_x - ax * TILE, self.player_z - az * TILE
             p = transform.map(QPointF(gx, gz))
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if len(self.player_trail) > 1:
+                trail = [transform.map(QPointF(x - ax * TILE, z - az * TILE)) for x, z in self.player_trail]
+                n = len(trail)
+                for i in range(1, n):
+                    painter.setPen(QPen(QColor(241, 196, 15, 40 + int(180 * i / n)), 2.5,
+                                        Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                    painter.drawLine(trail[i - 1], trail[i])
             painter.setBrush(QColor(231, 76, 60, self.pulse_alpha))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(p, self.pulse_radius, self.pulse_radius)
+            if self.player_yaw is not None:
+                # where the player is looking: a small arrow (yaw 0 = south, 90 = west)
+                a = math.radians(self.player_yaw)
+                dx, dz = -math.sin(a), math.cos(a)
+                tip = QPointF(p.x() + dx * 15, p.y() + dz * 15)
+                left = QPointF(p.x() + dz * 6, p.y() - dx * 6)
+                right = QPointF(p.x() - dz * 6, p.y() + dx * 6)
+                painter.setBrush(QColor(255, 255, 255, 230))
+                painter.setPen(QPen(QColor(120, 30, 20), 1))
+                painter.drawPolygon(QPolygonF([tip, left, right]))
             painter.setBrush(QColor(231, 76, 60))
             painter.setPen(QPen(QColor(255, 255, 255), 1.5))
             painter.drawEllipse(p, 4.5, 4.5)
@@ -840,6 +1027,8 @@ class MapViewer(QWidget):
         lines = [f"Zoom {self.zoom_level * 100:.0f}%   |   regioni caricate {sum(1 for t in self.tiles.values() if t['detailed'])}"
                  f"/{len(self.regions)}" + (f"   |   in caricamento: {pending}" if pending else "")]
         lines.append(f"Strutture: {n_placed} piazzate col programma, {n_game} generate dal gioco")
+        if self.live_status:
+            lines.append(self.live_status)
         painter.setFont(QFont("Segoe UI", 8))
         fm = QFontMetrics(painter.font())
         w = max(fm.horizontalAdvance(t) for t in lines) + 16
@@ -1038,6 +1227,61 @@ class MapViewer(QWidget):
         p = inv.map(QPointF(screen_pos))
         return int(p.x() // 1), int(p.y() // 1)
 
+    @staticmethod
+    def _entry_items(entry):
+        return entry["items"] if entry.get("kind") == "group" else [entry]
+
+    def staged_at(self, grid_x, grid_z):
+        """The queued entry (last added first) with a structure under a grid position, or None."""
+        ax, az = self.anchor
+        wx, wz = ax * TILE + grid_x, az * TILE + grid_z
+        for entry in reversed(self.staged_placements):
+            for it in self._entry_items(entry):
+                st = it.get("structure")
+                if st is None or it.get("kind") in ("path", "demolish"):
+                    continue
+                if it["world_x"] <= wx < it["world_x"] + st.width and it["world_z"] <= wz < it["world_z"] + st.length:
+                    return entry
+        return None
+
+    def _staged_row(self, entry):
+        for i, e in enumerate(self.staged_placements):
+            if e is entry:
+                return i
+        return -1
+
+    def select_staged(self, entry, emit=True):
+        self.selected_staged = entry
+        if emit:
+            self.staged_selected.emit(self._staged_row(entry) if entry is not None else -1)
+        self.update()
+
+    def _in_preview(self, grid_x, grid_z):
+        st = self.selected_structure
+        return st is not None and self.preview_grid_x <= grid_x < self.preview_grid_x + st.width \
+            and self.preview_grid_z <= grid_z < self.preview_grid_z + st.length
+
+    def _staged_menu(self, entry, global_pos):
+        from PyQt6.QtWidgets import QMenu
+        row = self._staged_row(entry)
+        menu = QMenu(self)
+        title = menu.addAction(entry.get("name", "") or "Struttura in coda")
+        title.setEnabled(False)
+        menu.addSeparator()
+        hint = menu.addAction("Sposta: trascinala sulla mappa")
+        hint.setEnabled(False)
+        rot = menu.addAction("Ruota di 90 gradi (R)")
+        rot.setEnabled(entry.get("kind") != "group")
+        dup = menu.addAction("Mettine un'altra uguale (Ctrl+D)")
+        rem = menu.addAction("Togli dalla coda (Canc)")
+        chosen = menu.exec(global_pos)
+        if chosen is rot:
+            self.staged_action.emit(row, "rotate")
+        elif chosen is dup:
+            self.staged_action.emit(row, "duplicate")
+        elif chosen is rem:
+            self.staged_action.emit(row, "remove")
+
     def mousePressEvent(self, event):
         has_map = self.region is not None
         if event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and event.modifiers() == Qt.KeyboardModifier.ControlModifier):
@@ -1087,30 +1331,40 @@ class MapViewer(QWidget):
         elif event.button() == Qt.MouseButton.LeftButton and self.mode == "select" and has_map:
             self.select_start = self.select_end = self.screen_to_grid(event.position())
             self.update()
-        elif event.button() == Qt.MouseButton.LeftButton:
-            if self.selected_structure and has_map:
-                grid_x, grid_z = self.screen_to_grid(event.position())
-                sw = self.selected_structure.width
-                sl = self.selected_structure.length
-                if (self.preview_grid_x <= grid_x < self.preview_grid_x + sw) and (self.preview_grid_z <= grid_z < self.preview_grid_z + sl):
-                    self.drag_offset_x = grid_x - self.preview_grid_x
-                    self.drag_offset_z = grid_z - self.preview_grid_z
-                else:
-                    # Relocate preview box center to click, lock coordinates, and start dragging immediately
-                    self.preview_grid_x = grid_x - sw // 2
-                    self.preview_grid_z = grid_z - sl // 2
-                    self.drag_offset_x = sw // 2
-                    self.drag_offset_z = sl // 2
-                    self.structure_placed.emit(self.preview_grid_x, self.preview_grid_z)
+        elif event.button() == Qt.MouseButton.LeftButton and has_map:
+            grid_x, grid_z = self.screen_to_grid(event.position())
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if self.selected_structure and self._in_preview(grid_x, grid_z) and (self.is_locked or shift
+                                                                                  or not self.staged_at(grid_x, grid_z)):
+                # the structure being placed: drag it
+                self.drag_offset_x = grid_x - self.preview_grid_x
+                self.drag_offset_z = grid_z - self.preview_grid_z
                 self.is_dragging_structure = True
                 self.is_locked = True
+                self.select_staged(None)
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
                 self.update()
-            else:
-                self.is_panning = True
-                self.last_mouse_pos = event.position()
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                return
+            entry = None if shift else self.staged_at(grid_x, grid_z)
+            if entry is not None:
+                # a queued structure: select it, and drag it if the mouse moves
+                self.select_staged(entry)
+                self.staged_drag = [entry, grid_x, grid_z, 0, 0]
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                return
+            # elsewhere: a click places the structure, a drag moves the map
+            self.press = (event.position(), grid_x, grid_z)
+            self.last_mouse_pos = event.position()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.is_panning = True
+            self.last_mouse_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         elif event.button() == Qt.MouseButton.RightButton:
+            entry = self.staged_at(*self.screen_to_grid(event.position())) if self.region else None
+            if entry is not None and not (self.selected_structure and not self.is_locked):
+                self.select_staged(entry)
+                self._staged_menu(entry, event.globalPosition().toPoint())
+                return
             # Right-click unlocks placement to follow mouse
             if self.is_locked:
                 self.is_locked = False
@@ -1158,6 +1412,25 @@ class MapViewer(QWidget):
             self.preview_edited.emit(list(self.wall_preview["points"]))
             self.update()
             return
+        if event.button() == Qt.MouseButton.LeftButton and self.staged_drag is not None:
+            entry, _, _, dx, dz = self.staged_drag
+            self.staged_drag = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if dx or dz:
+                self.staged_moved.emit(self._staged_row(entry), dx, dz)
+            self.update()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self.press is not None:
+            _, gx, gz = self.press
+            self.press = None
+            if not self.is_panning:
+                self.select_staged(None)
+                if self.selected_structure:
+                    # a click: the structure goes there (centred on the click) and stays locked
+                    self.preview_grid_x = gx - self.selected_structure.width // 2
+                    self.preview_grid_z = gz - self.selected_structure.length // 2
+                    self.is_locked = True
+                    self.structure_placed.emit(self.preview_grid_x, self.preview_grid_z)
         if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
             if self.is_dragging_structure:
                 self.is_dragging_structure = False
@@ -1172,10 +1445,21 @@ class MapViewer(QWidget):
         self.mouse_screen_pos = event.position()
         grid_x, grid_z = self.screen_to_grid(event.position())
 
+        if self.press is not None and not self.is_panning:
+            moved = event.position() - self.press[0]
+            if abs(moved.x()) + abs(moved.y()) > 5:
+                self.is_panning = True               # the press becomes a drag of the map
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
         if self.is_panning and self.last_mouse_pos:
             delta = event.position() - self.last_mouse_pos
             self.pan_offset += delta / self.zoom_level
             self.last_mouse_pos = event.position()
+            self.update()
+            return
+        if self.staged_drag is not None:
+            self.staged_drag[3] = grid_x - self.staged_drag[1]
+            self.staged_drag[4] = grid_z - self.staged_drag[2]
+            self.trigger_hover_event(grid_x, grid_z)
             self.update()
             return
 
@@ -1261,6 +1545,22 @@ class MapViewer(QWidget):
             self.set_mode("place")
             self.mode_cancelled.emit(left)
             return
+        if self.selected_staged is not None and self.mode == "place":
+            row = self._staged_row(self.selected_staged)
+            if row < 0:
+                self.selected_staged = None
+            elif key == Qt.Key.Key_R:
+                self.staged_action.emit(row, "rotate")
+                return
+            elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                self.staged_action.emit(row, "remove")
+                return
+            elif key == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.staged_action.emit(row, "duplicate")
+                return
+            elif key == Qt.Key.Key_Escape:
+                self.select_staged(None)
+                return
         if key == Qt.Key.Key_R and self.selected_structure:
             # The main window owns the selected structure: rotating only the preview
             # here would inject a structure different from the one displayed.

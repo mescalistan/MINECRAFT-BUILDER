@@ -1,4 +1,5 @@
 import struct
+import sys
 import gzip
 import zlib
 
@@ -179,6 +180,171 @@ def parse_nbt_bytes(data):
     return val, str(name)
 
 
+# A block record {pos: [x, y, z], state: n} with nothing else: always 36 bytes
+_REC_HEAD = b"\x09\x00\x03pos\x03\x00\x00\x00\x03"
+_STATE_HEAD = b"\x03\x00\x05state"
+_REC = struct.Struct(">iii8xi")
+_FIXED_SIZE = {1: 1, 2: 2, 3: 4, 4: 8, 5: 4, 6: 8}
+
+
+def skip_payload(buf, pos, t):
+    """Position after a tag payload, without building any object."""
+    if t in _FIXED_SIZE:
+        return pos + _FIXED_SIZE[t]
+    if t == 8:
+        return pos + 2 + ((buf[pos] << 8) | buf[pos + 1])
+    if t == 7:
+        return pos + 4 + _I.unpack_from(buf, pos)[0]
+    if t == 11:
+        return pos + 4 + 4 * _I.unpack_from(buf, pos)[0]
+    if t == 12:
+        return pos + 4 + 8 * _I.unpack_from(buf, pos)[0]
+    if t == 9:
+        it, n = buf[pos], _I.unpack_from(buf, pos + 1)[0]
+        pos += 5
+        if it in _FIXED_SIZE:
+            return pos + _FIXED_SIZE[it] * max(0, n)
+        for _ in range(max(0, n)):
+            pos = skip_payload(buf, pos, it)
+        return pos
+    if t == 10:
+        while True:
+            tt = buf[pos]
+            if tt == 0:
+                return pos + 1
+            pos = skip_payload(buf, pos + 3 + ((buf[pos + 1] << 8) | buf[pos + 2]), tt)
+    if t == 0:
+        return pos
+    raise ValueError(f"Tag NBT sconosciuto {t}")
+
+
+def parse_root_skipping(data, skip):
+    """Root compound with the top-level tags named in 'skip' left out (read-only uses, e.g. the map)."""
+    data = bytes(data)
+    if not data or data[0] != 10:
+        return parse_nbt_bytes(data)[0]
+    _, pos = _read_string(data, 1)
+    root = TAG_Compound()
+    while True:
+        t = data[pos]
+        if t == 0:
+            break
+        name, pos = _read_string(data, pos + 1)
+        if name in skip:
+            pos = skip_payload(data, pos, t)
+        else:
+            root[name], pos = _read_payload(data, pos, t)
+    return root
+
+
+def _fixed_fields(data, pos, n):
+    """
+    The n block records at pos are all the fixed 36-byte kind: their x, y, z, state as four
+    array('i'), sliced out of the bytes at C speed; None if any record differs.
+    """
+    from array import array
+    end = pos + 36 * n
+    if n <= 0 or end > len(data):
+        return None
+    for off, pattern in ((0, _REC_HEAD), (23, _STATE_HEAD), (35, b"\x00")):
+        for k, byte in enumerate(pattern):
+            if data[pos + off + k:end:36] != bytes((byte,)) * n:
+                return None
+    fields = []
+    for off in (11, 15, 19, 31):
+        buf = bytearray(4 * n)
+        for k in range(4):
+            buf[k::4] = data[pos + off + k:end:36]
+        a = array("i")
+        a.frombytes(buf)
+        if sys.byteorder == "little":
+            a.byteswap()
+        fields.append(a)
+    return fields
+
+
+def fixed_records_bytes(xs, ys, zs, si):
+    """The 36-byte records of n blocks built at C speed (the inverse of _fixed_fields)."""
+    from array import array
+    n = len(xs)
+    buf = bytearray(36 * n)
+    for off, pattern in ((0, _REC_HEAD), (23, _STATE_HEAD)):
+        for k, byte in enumerate(pattern):
+            buf[off + k::36] = bytes((byte,)) * n
+    for off, values in ((11, xs), (15, ys), (19, zs), (31, si)):
+        a = array("i", values)
+        if sys.byteorder == "little":
+            a.byteswap()
+        raw = a.tobytes()
+        for k in range(4):
+            buf[off + k::36] = raw[k::4]
+    return buf
+
+
+def parse_structure_packed(data, block_nbt=None, only_extra=False):
+    """
+    Like parse_structure_bytes, but the blocks come back as four array('i') (x, y, z, state): a few
+    bytes per block instead of a tuple, read at C speed when the records have the fixed layout.
+    Records after 'fixedRecords' (MinecraftBuilder metadata) only carry block entity data.
+    """
+    from array import array
+    data = bytes(data)
+    _, pos = _read_string(data, 1)
+    root = TAG_Compound()
+    fields = None
+    while True:
+        t_type = data[pos]
+        if t_type == 0:
+            break
+        name, pos = _read_string(data, pos + 1)
+        if name == "blocks" and t_type == 9 and data[pos] == 10:
+            length = _I.unpack_from(data, pos + 1)[0]
+            pos += 5
+            meta = root.get("MinecraftBuilder") or {}
+            n_fixed = 0 if only_extra else int(meta.get("fixedRecords", length))
+            fields = _fixed_fields(data, pos, n_fixed) if 0 < n_fixed <= length else None
+            done = 0
+            if fields is not None:
+                pos += 36 * n_fixed
+                done = n_fixed
+                extra_only = "fixedRecords" in meta       # the rest: block entity data of placed blocks
+            else:
+                fields = [array("i"), array("i"), array("i"), array("i")]
+                extra_only = only_extra
+            xs, ys, zs, si = fields
+            for _ in range(max(0, length - done)):
+                x = y = z = state = 0
+                extra = None
+                while True:
+                    tt = data[pos]
+                    if tt == 0:
+                        pos += 1
+                        break
+                    nlen = (data[pos + 1] << 8) | data[pos + 2]
+                    key = data[pos + 3:pos + 3 + nlen]
+                    pos += 3 + nlen
+                    if tt == 9 and key == b"pos" and data[pos] == 3 and _I.unpack_from(data, pos + 1)[0] == 3:
+                        x, y, z = struct.unpack_from(">iii", data, pos + 5)
+                        pos += 17
+                    elif tt == 3 and key == b"state":
+                        state = _I.unpack_from(data, pos)[0]
+                        pos += 4
+                    elif tt == 10 and key == b"nbt" and block_nbt is not None:
+                        extra, pos = _read_payload(data, pos, tt)
+                    else:
+                        _, pos = _read_payload(data, pos, tt)
+                if not extra_only:
+                    xs.append(x)
+                    ys.append(y)
+                    zs.append(z)
+                    si.append(state)
+                if extra:
+                    block_nbt[(x, y, z)] = extra
+        else:
+            root[name], pos = _read_payload(data, pos, t_type)
+    return root, fields
+
+
 def parse_structure_bytes(data, block_nbt=None):
     """
     Parses a structure-block .nbt document without building a tag object for every block:
@@ -204,7 +370,13 @@ def parse_structure_bytes(data, block_nbt=None):
             pos += 5
             blocks = []
             append = blocks.append
+            rec_head, state_head = _REC_HEAD, _STATE_HEAD
+            unpack_rec = _REC.unpack_from
             for _ in range(max(0, length)):
+                if data.startswith(rec_head, pos) and data.startswith(state_head, pos + 23) and data[pos + 35] == 0:
+                    append(unpack_rec(data, pos + 11))      # x, y, z, state in one call
+                    pos += 36
+                    continue
                 x = y = z = state = 0
                 extra = None
                 while True:
@@ -354,6 +526,92 @@ def write_tag(f, tag):
 # ---------------------------------------------------------------------------
 # File helpers
 # ---------------------------------------------------------------------------
+
+def read_structure_file(path, block_nbt=None):
+    """
+    parse_structure_packed() for a file, streaming: the fixed block records of the files written by
+    this program (MinecraftBuilder.fixedRecords before the block list) are decompressed and converted
+    about 10 MB at a time, so a cut with tens of millions of blocks never sits in memory decompressed.
+    Other files are read whole.
+    """
+    from array import array
+    with open(path, "rb") as fh:
+        magic = fh.read(2)
+    if magic != b"\x1f\x8b":
+        with open(path, "rb") as fh:
+            return parse_structure_packed(_maybe_decompress(fh.read()), block_nbt)
+    f = gzip.open(path, "rb")
+    try:
+        buf = bytearray()
+
+        def need(n):
+            while len(buf) < n:
+                chunk = f.read(max(1 << 20, n - len(buf)))
+                if not chunk:
+                    raise ValueError("File NBT troncato")
+                buf.extend(chunk)
+
+        need(3)
+        if buf[0] != 10:
+            buf.extend(f.read())
+            return parse_structure_packed(bytes(buf), block_nbt)
+        pos = 3 + ((buf[1] << 8) | buf[2])
+        root = TAG_Compound()
+        while True:
+            need(pos + 3)
+            t_type = buf[pos]
+            if t_type == 0:
+                break
+            nlen = (buf[pos + 1] << 8) | buf[pos + 2]
+            need(pos + 3 + nlen)
+            name = decode_mutf8(bytes(buf[pos + 3:pos + 3 + nlen]))
+            body = pos + 3 + nlen
+            meta = root.get("MinecraftBuilder") or {}
+            if name == "blocks" and t_type == 9 and "fixedRecords" in meta:
+                need(body + 5)
+                length = _I.unpack_from(buf, body + 1)[0]
+                n_fixed = int(meta["fixedRecords"])
+                del buf[:body + 5]
+                xs, ys, zs, si = array("i"), array("i"), array("i"), array("i")
+                step = 262144                       # records per piece (about 9 MB)
+                left = n_fixed
+                while left > 0:
+                    take = min(step, left)
+                    need(36 * take)
+                    piece = bytes(buf[:36 * take])
+                    del buf[:36 * take]
+                    fields = _fixed_fields(piece, 0, take)
+                    if fields is None:
+                        raise ValueError("Record dei blocchi non validi")
+                    for dst, src in zip((xs, ys, zs, si), fields):
+                        dst.extend(src)
+                    left -= take
+                # what follows (block entity records, other tags) is small: parse it whole
+                buf.extend(f.read())
+                rest = b"\x0a\x00\x00" + b"\x09\x00\x06blocks\x0a" + struct.pack(">i", length - n_fixed) + bytes(buf)
+                tail_root, extra = parse_structure_packed(rest, block_nbt, only_extra=True)
+                root.update({k: v for k, v in tail_root.items()})
+                return root, [xs, ys, zs, si]
+            if name == "blocks":
+                break                               # not written by this program: read it whole
+            # any other tag: parse it (reading more of the file until it is complete)
+            while True:
+                try:
+                    data = bytes(buf)
+                    root[name], end = _read_payload(data, body, t_type)
+                    break
+                except (IndexError, struct.error):
+                    more = f.read(1 << 22)
+                    if not more:
+                        raise ValueError("File NBT troncato")
+                    buf.extend(more)
+            del buf[:end]
+            pos = 0
+    finally:
+        f.close()
+    with open(path, "rb") as fh:
+        return parse_structure_packed(_maybe_decompress(fh.read()), block_nbt)
+
 
 def _maybe_decompress(data):
     if data[:2] == b'\x1f\x8b':
