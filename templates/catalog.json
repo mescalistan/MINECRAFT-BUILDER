@@ -162,6 +162,12 @@
   "description": "Avamposto dei predoni in quercia scura e betulla, con piani collegati da scale e terrazza di vedetta."
  },
  {
+  "file": "auto_composter_station.nbt",
+  "title": "Compostiera automatica (6 compostiere)",
+  "category": "Farm automatiche",
+  "description": "Semi, foglie, canne e scarti delle farm nella cassa in alto: le tramogge riempiono 6 compostiere e la farina d'ossa finisce nella cassa davanti."
+ },
+ {
   "file": "iron_farm.nbt",
   "title": "Fonderia del ferro (iron farm 1.21)",
   "category": "Farm automatiche",
@@ -172,6 +178,42 @@
   "title": "Animal Pen",
   "category": "Fattorie e animali",
   "description": "Recinto per animali con riparo, fieno, compostiera e abbeveratoi."
+ },
+ {
+  "file": "auto_honey_farm.nbt",
+  "title": "Apiario automatico (4 arnie)",
+  "category": "Farm automatiche",
+  "description": "4 arnie con 3 api ciascuna davanti a un giardino fiorito chiuso: un comparatore legge il miele e, solo quando l'arnia e' piena, un dispenser la svuota con una bottiglia. Le bottiglie di miele restano nel dispenser (8 pile di bottiglie vuote incluse)."
+ },
+ {
+  "file": "auto_honey_farm_grande.nbt",
+  "title": "Apiario automatico (8 arnie)",
+  "category": "Farm automatiche",
+  "description": "8 arnie con 3 api ciascuna davanti a un giardino fiorito chiuso: un comparatore legge il miele e, solo quando l'arnia e' piena, un dispenser la svuota con una bottiglia. Le bottiglie di miele restano nel dispenser (8 pile di bottiglie vuote incluse)."
+ },
+ {
+  "file": "auto_beetroots_field.nbt",
+  "title": "Campo di barbabietole con raccolta ad acqua (54 piante)",
+  "category": "Farm automatiche",
+  "description": "9 file di barbabietole su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico)."
+ },
+ {
+  "file": "auto_carrots_field.nbt",
+  "title": "Campo di carote con raccolta ad acqua (54 piante)",
+  "category": "Farm automatiche",
+  "description": "9 file di carote su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico)."
+ },
+ {
+  "file": "auto_wheat_field.nbt",
+  "title": "Campo di grano con raccolta ad acqua (54 piante)",
+  "category": "Farm automatiche",
+  "description": "9 file di grano su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico)."
+ },
+ {
+  "file": "auto_potatoes_field.nbt",
+  "title": "Campo di patate con raccolta ad acqua (54 piante)",
+  "category": "Farm automatiche",
+  "description": "9 file di patate su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico)."
  },
  {
   "file": "crop_farm.nbt",
@@ -271,13 +313,13 @@
  },
  {
   "file": "auto_cactus_farm.nbt",
-  "title": "Farm di cactus (25 cactus)",
+  "title": "Farm di cactus (13 cactus)",
   "category": "Farm automatiche",
   "description": "Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone."
  },
  {
   "file": "auto_cactus_farm_grande.nbt",
-  "title": "Farm di cactus (61 cactus)",
+  "title": "Farm di cactus (41 cactus)",
   "category": "Farm automatiche",
   "description": "Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone."
  },
@@ -306,6 +348,18 @@
   "description": "Scuderia in abete con sei box, cancelli, fieno, abbeveratoi, cassa per selle e tetto a capanna."
  },
  {
+  "file": "auto_egg_farm_grande.nbt",
+  "title": "Pollaio automatico (24 galline)",
+  "category": "Farm automatiche",
+  "description": "24 galline, ognuna nella sua cella di vetro sopra una tramoggia: le uova cadono nella tramoggia e finiscono nella cassa (lanciale per avere nuovi polli)."
+ },
+ {
+  "file": "auto_egg_farm.nbt",
+  "title": "Pollaio automatico (8 galline)",
+  "category": "Farm automatiche",
+  "description": "8 galline, ognuna nella sua cella di vetro sopra una tramoggia: le uova cadono nella tramoggia e finiscono nella cassa (lanciale per avere nuovi polli)."
+ },
+ {
   "file": "red_barn.nbt",
   "title": "Red Barn and Silo",
   "category": "Fattorie e animali",
@@ -328,6 +382,24 @@
   "title": "Hub sotterraneo esagonale con magazzino",
   "category": "Hub e magazzini",
   "description": "Sala esagonale gotico-industriale 22 blocchi sotto terra con cupola a costoloni e lampadario, quattro stazioni (incanti, alchimia, officina, fonderia), galleria-magazzino con smistatore automatico a 9 oggetti (barili con nome, barile di troppo pieno, deposito con canale d'acqua), ascensore a bolle di sabbia delle anime con scala a chiocciola e chiosco in superficie, porte di servizio a est e ovest per agganciare altri moduli. Redstone tutta nascosta dietro le pareti; i filtri e i nomi dei barili sono gia' scritti dall'app."
+ },
+ {
+  "file": "auto_sorter_mob.nbt",
+  "title": "Magazzino smistatore dei bottini dei mob (7 barili)",
+  "category": "Hub e magazzini",
+  "description": "Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 7 barili con il nome; il resto finisce nel barile 'Altro'."
+ },
+ {
+  "file": "auto_sorter_minerali.nbt",
+  "title": "Magazzino smistatore dei minerali (9 barili)",
+  "category": "Hub e magazzini",
+  "description": "Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 9 barili con il nome; il resto finisce nel barile 'Altro'."
+ },
+ {
+  "file": "auto_sorter_farm.nbt",
+  "title": "Magazzino smistatore dei raccolti (9 barili)",
+  "category": "Hub e magazzini",
+  "description": "Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 9 barili con il nome; il resto finisce nel barile 'Altro'."
  },
  {
   "file": "arc_de_triomphe.nbt",

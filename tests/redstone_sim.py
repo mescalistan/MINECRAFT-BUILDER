@@ -422,14 +422,19 @@ class AnalogSim:
     Iterates (dust relaxation, comparators, torches) until nothing changes; raises on oscillation.
     """
 
-    def __init__(self, cells, contents=None, daylight=None, levers=None, firing=None):
-        """firing: observers sending their pulse right now (the steady state during the pulse)."""
+    def __init__(self, cells, contents=None, daylight=None, levers=None, firing=None, hives=None):
+        """
+        firing: observers sending their pulse right now (the steady state during the pulse);
+        hives: {pos: honey level 0-5} of the beehives read by comparators. Buttons are levers held down.
+        """
         self.cells = {p: (_short(n), dict(pr)) for p, (n, pr) in cells.items()}
+        self.hives = dict(hives or {})
         self.firing = set(firing or ())
         self.rep = {p: False for p, (n, _) in self.cells.items() if n == "repeater"}
         self.contents = {p: list(v) for p, v in (contents or {}).items()}
         self.daylight = dict(daylight or {})
-        self.levers = {p: pr.get("powered") == "true" for p, (n, pr) in self.cells.items() if n == "lever"}
+        self.levers = {p: pr.get("powered") == "true" for p, (n, pr) in self.cells.items()
+                       if n == "lever" or n.endswith("_button")}
         self.levers.update(levers or {})
         self.dust = {p: 0 for p, (n, _) in self.cells.items() if n == "redstone_wire"}
         self.comp = {p: 0 for p, (n, _) in self.cells.items() if n == "comparator"}
@@ -500,7 +505,7 @@ class AnalogSim:
         for dx, dy, dz in ALL6:
             q = (b[0] + dx, b[1] + dy, b[2] + dz)
             n = self.name(q)
-            if n == "lever" and self.levers.get(q) and self.lever_attached(q) == b:
+            if (n == "lever" or (n or "").endswith("_button")) and self.levers.get(q) and self.lever_attached(q) == b:
                 best = 15
             elif n in ("redstone_torch", "redstone_wall_torch") and self.torch.get(q) \
                     and q == (b[0], b[1] - 1, b[2]):
@@ -530,7 +535,7 @@ class AnalogSim:
     def source_into(self, q, target):
         """Power a non-dust neighbour q sends to the component or dust at 'target'."""
         n = self.name(q)
-        if n == "lever":
+        if n == "lever" or (n or "").endswith("_button"):
             return 15 if self.levers.get(q) else 0
         if n in ("redstone_torch", "redstone_wall_torch"):
             return 15 if self.torch.get(q) and self.torch_attached(q) != target else 0
@@ -623,6 +628,8 @@ class AnalogSim:
         dx, dz = DIRS[self.props(c)["facing"]]
         q = (c[0] + dx, c[1], c[2] + dz)
         n = self.name(q)
+        if n in ("beehive", "bee_nest"):
+            return self.hives.get(q, 0)
         if n in CONTAINER_SLOTS:
             return container_signal(n, self.contents.get(q))
         if q in self.dust:

@@ -47,7 +47,7 @@ _SIMPLE_BLOCKS = """
 air cave_air void_air stone granite polished_granite diorite polished_diorite andesite polished_andesite
 deepslate cobbled_deepslate polished_deepslate deepslate_bricks cracked_deepslate_bricks deepslate_tiles
 cracked_deepslate_tiles chiseled_deepslate reinforced_deepslate calcite tuff polished_tuff tuff_bricks
-chiseled_tuff chiseled_tuff_bricks dripstone_block pointed_dripstone grass_block dirt coarse_dirt podzol rooted_dirt mud
+chiseled_tuff chiseled_tuff_bricks dripstone_block pointed_dripstone beehive bee_nest grass_block dirt coarse_dirt podzol rooted_dirt mud
 mycelium dirt_path farmland cobblestone mossy_cobblestone stone_bricks mossy_stone_bricks
 cracked_stone_bricks chiseled_stone_bricks smooth_stone bedrock sand red_sand gravel clay
 sandstone chiseled_sandstone cut_sandstone smooth_sandstone red_sandstone chiseled_red_sandstone
@@ -356,6 +356,8 @@ def allowed_properties(n):
     if n.endswith("_banner"):
         return {"rotation": {str(i) for i in range(16)}}
     table = {
+        "beehive": {"facing": HORIZONTAL, "honey_level": {str(i) for i in range(6)}},
+        "bee_nest": {"facing": HORIZONTAL, "honey_level": {str(i) for i in range(6)}},
         "melon_stem": {"age": {str(i) for i in range(8)}}, "pumpkin_stem": {"age": {str(i) for i in range(8)}},
         "attached_melon_stem": {"facing": HORIZONTAL}, "attached_pumpkin_stem": {"facing": HORIZONTAL},
         "pointed_dripstone": {"thickness": {"tip_merge", "tip", "frustum", "middle", "base"},

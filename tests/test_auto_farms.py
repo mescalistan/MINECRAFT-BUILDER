@@ -62,8 +62,8 @@ class FarmValidationTests(unittest.TestCase):
             b = build(name)
             for h in cells_named(b, "hopper"):
                 _, end = hopper_end(b, h)
-                self.assertIn(end, ("chest", "furnace", "blast_furnace", "smoker", "stone_bricks",
-                                    "white_concrete", "spruce_planks"),
+                self.assertIn(end, ("chest", "barrel", "furnace", "blast_furnace", "smoker", "composter",
+                                    "beehive", "stone_bricks", "white_concrete", "spruce_planks"),
                               f"{name}: la tramoggia {h} porta in {end}")
 
 
@@ -216,6 +216,92 @@ class LavaAndCactusTests(unittest.TestCase):
                 self.assertTrue(any(short(b.cells.get(in_front(h2, f), (None, {}))[0]) == "oak_fence"
                                     for f in ("north", "south", "east", "west")))
                 self.assertEqual(short(b.cells[(c[0], 0, c[2])][0]), "hopper")
+
+
+class EggHoneyCompostTests(unittest.TestCase):
+    def test_every_hen_stands_on_a_hopper_in_a_closed_cell(self):
+        for name in ("auto_egg_farm", "auto_egg_farm_grande"):
+            b = build(name)
+            hens = [e for e in b.entities if str(e["nbt"]["id"]).endswith("chicken")]
+            self.assertGreaterEqual(len(hens), 8)
+            for e in hens:
+                p = (int(e["pos"][0]), int(e["pos"][1]), int(e["pos"][2]))
+                below = (p[0], p[1] - 1, p[2])
+                self.assertEqual(short(b.cells[below][0]), "hopper")
+                self.assertEqual(hopper_end(b, below)[1], "chest")
+                for f in ("north", "south", "east", "west"):
+                    self.assertIn(in_front(p, f), b.cells, f"{name}: la gallina {p} puo' uscire")
+                self.assertIn((p[0], p[1] + 1, p[2]), b.cells)
+
+    def test_the_dispenser_empties_only_a_full_hive(self):
+        for name in ("auto_honey_farm", "auto_honey_farm_grande"):
+            b = build(name)
+            hives = cells_named(b, "beehive")
+            dispensers = cells_named(b, "dispenser")
+            self.assertEqual(len(hives), len(dispensers))
+            for h in hives:
+                d = (h[0] + 1, h[1], h[2])
+                self.assertIn(d, dispensers)
+                self.assertEqual(in_front(d, b.cells[d][1]["facing"]), h)
+                for level in range(6):
+                    sim = AnalogSim(b.cells, hives={h: level}).settle()
+                    on = [q for q in dispensers if sim.dispenser_on(q)]
+                    self.assertEqual(on, [d] if level == 5 else [], f"{name}: livello {level} -> {on}")
+                self.assertTrue(all(str(i["id"]).endswith("glass_bottle") for i in b.block_nbt[d]["Items"]))
+            bees = [e for e in b.entities if str(e["nbt"]["id"]).endswith("bee")]
+            self.assertEqual(len(bees), 3 * len(hives))
+
+    def test_composters_are_fed_from_above_and_emptied_below(self):
+        b = build("auto_composter_station")
+        for c in cells_named(b, "composter"):
+            self.assertEqual(hopper_end(b, (c[0], c[1] + 1, c[2]))[0], c)
+            self.assertEqual(hopper_end(b, (c[0], c[1] - 1, c[2]))[1], "chest")
+
+
+class CropFieldTests(unittest.TestCase):
+    def test_the_button_fires_every_water_dispenser_and_the_water_reaches_the_hoppers(self):
+        for crop in ("wheat", "carrots", "potatoes", "beetroots"):
+            b = build(f"auto_{crop}_field")
+            dispensers = cells_named(b, "dispenser")
+            button = cells_named(b, "stone_button")[0]
+            self.assertFalse(any(AnalogSim(b.cells).settle().dispenser_on(d) for d in dispensers))
+            sim = AnalogSim(b.cells, levers={button: True}).settle()
+            self.assertTrue(all(sim.dispenser_on(d) for d in dispensers), crop)
+            for d in dispensers:
+                self.assertEqual(b.cells[d][1]["facing"], "east")
+                src = in_front(d, "east")
+                # source + 7 flowing blocks: the last one is over a hopper
+                end = (src[0] + 7, src[1] - 1, src[2])
+                self.assertEqual(short(b.cells[end][0]), "hopper")
+                self.assertEqual(hopper_end(b, end)[1], "chest")
+                self.assertTrue(str(b.block_nbt[d]["Items"][0]["id"]).endswith("water_bucket"))
+            for f in cells_named(b, "farmland"):
+                self.assertTrue(any(abs(w[0] - f[0]) <= 4 and w[1] == f[1] for w in cells_named(b, "water")))
+
+
+class SorterStorageTests(unittest.TestCase):
+    def test_one_more_item_unlocks_only_its_barrel(self):
+        from test_hub_farm import _items
+        import templates.hub_farm as hf
+        for name in ("auto_sorter_minerali", "auto_sorter_farm", "auto_sorter_mob"):
+            b = build(name)
+            contents = {p: _items(d) for p, d in b.block_nbt.items()}
+            idle = AnalogSim(b.cells, contents).settle()
+            for sl in b.sorter_slices:
+                self.assertTrue(idle.hopper_locked(sl["L"]), name)
+            for sl in b.sorter_slices:
+                items = contents[sl["F"]]
+                c2 = dict(contents)
+                c2[sl["F"]] = [(items[0][0], hf.FILTER_COUNT + 1)] + items[1:]
+                sim = AnalogSim(b.cells, c2).settle()
+                self.assertFalse(sim.hopper_locked(sl["L"]), f"{name}: {sl['item']}")
+                for other in b.sorter_slices:
+                    if other is not sl:
+                        self.assertTrue(sim.hopper_locked(other["L"]))
+                self.assertEqual(hopper_end(b, sl["L"])[0], sl["barrel"])
+            chain = [h for h in cells_named(b, "hopper") if h[1] == 3]
+            self.assertFalse(any(idle.hopper_locked(h) for h in chain))
+            self.assertEqual(short(b.cells[(1, 4, 3)][0]), "chest")
 
 
 if __name__ == "__main__":

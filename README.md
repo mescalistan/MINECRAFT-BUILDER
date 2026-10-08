@@ -57,7 +57,7 @@
   - Animazione radar circolare pulsante sul marker del giocatore.
   - Pulsante per centrare istantaneamente la visuale sulla regione del personaggio.
 - 🏗️ **Gestione e Posizionamento Strutture**:
-  - Libreria integrata di 103 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
+  - Libreria integrata di 115 modelli vanilla giocabili (monumenti famosi, classici di Minecraft, castelli, case, fattorie) più le strutture da mod originali (*Ice and Fire*, *Better Strongholds*, *Create Astral*).
   - Browser per cercare e scaricare schemi online.
   - Anteprima grafica top-down 2D dei blocchi reali con trasparenza per allineamento preciso.
   - Rotazione a 90° oraria (`R`) e drag-and-drop con click-to-place: un clic posiziona la struttura, trascinando fuori dalla struttura si sposta la mappa, trascinando la struttura la si sposta.
@@ -169,7 +169,7 @@
 └── requirements.txt        # Dipendenze Python
 ```
 
-### 🧱 Libreria di template vanilla (103 modelli)
+### 🧱 Libreria di template vanilla (115 modelli)
 
 Tutti generati da codice con `python tools/build_templates.py` (solo blocchi vanilla, DataVersion 3955 / MC 1.21.1), validati automaticamente per la giocabilità e testati con iniezione in un mondo. Il livello y=0 di ogni modello è il primo strato sopra il terreno.
 
@@ -313,7 +313,7 @@ Strutture più dettagliate aggiunte di recente (ispirate alle costruzioni più p
 | Hub sotterraneo esagonale con magazzino | `underground_hub.nbt` | 39×38×57 (22 strati sotto terra) | Sala esagonale gotico-industriale con smistatore a 9 oggetti, ascensore a bolle, scala a chiocciola e chiosco in superficie. |
 | Fonderia del ferro (iron farm 1.21) | `iron_farm.nbt` | 18×29×18 | Iron farm compatta con villager e zombie inclusi, lama di lava, feritoia giorno/notte e leva di spegnimento. |
 
-#### ⚙️ Farm automatiche (23 modelli, `tools/templates/auto_farms.py`)
+#### ⚙️ Farm automatiche (35 modelli, `tools/templates/auto_farms.py`)
 
 Meccanismi classici che funzionano in sopravvivenza, ognuno in piu' taglie e stili (pietra, legno, moderno). La redstone di ogni farm e' verificata dai test con il simulatore di circuiti (`tests/test_auto_farms.py`): scattano i pistoni e i dispenser giusti, solo quando devono, senza oscillazioni; ogni catena di tramogge finisce in una cassa o in una fornace; le piante hanno acqua o terra bagnata, i cactus non toccano nulla.
 
@@ -323,6 +323,11 @@ Meccanismi classici che funzionano in sopravvivenza, ognuno in piu' taglie e sti
 - **Super fornace, altoforno, cucina**: linee di tramogge distribuiscono materiali e combustibile su ogni fornace e raccolgono i prodotti in una cassa.
 - **Lava**: spuntoni di dripstone sotto una vasca di lava riempiono da soli i calderoni.
 - **Cactus**: a scacchiera sulla sabbia sopra un pavimento di tramogge, si spezzano crescendo contro una staccionata.
+- **Uova**: ogni gallina nella sua cella di vetro sopra una tramoggia.
+- **Miele**: il comparatore legge l'arnia, cinque polveri tolgono un livello ciascuna e un ripetitore fa scattare il dispenser con le bottiglie solo quando l'arnia e' piena (livello 5).
+- **Farina d'ossa**: tramogge che riempiono le compostiere e raccolgono la farina d'ossa.
+- **Campi di grano, carote, patate, barbabietole** (semiautomatici): un pulsante fa versare l'acqua ai dispenser, che raccoglie tutto nelle tramogge; un secondo clic la ritira; si ripianta a mano.
+- **Magazzini smistatori** (minerali, raccolti, bottini dei mob): lo smistatore dell'hub a prova di troppo pieno, con barili col nome; tarato su oggetti che si impilano a 64.
 
 | Modello | File | Dimensioni (X×Y×Z) | Descrizione |
 |---|---|---|---|
@@ -347,8 +352,20 @@ Meccanismi classici che funzionano in sopravvivenza, ognuno in piu' taglie e sti
 | Cucina automatica (6 affumicatori, cibo) | `auto_smoker_kitchen.nbt` | 9×6×4 | Metti i materiali nella cassa in alto a sinistra e il combustibile in quella sotto: le tramogge li distribuiscono su 6 blocchi e raccolgono tutto il prodotto nella cassa in fondo. |
 | Farm di lava (9 calderoni) | `auto_lava_farm.nbt` | 9×6×9 | 9 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio. |
 | Farm di lava (25 calderoni) | `auto_lava_farm_grande.nbt` | 13×6×13 | 25 calderoni sotto spuntoni di dripstone appesi a uno strato di pietra con la lava sopra: i calderoni si riempiono di lava da soli, basta raccoglierla col secchio. |
-| Farm di cactus (25 cactus) | `auto_cactus_farm.nbt` | 10×5×10 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
-| Farm di cactus (61 cactus) | `auto_cactus_farm_grande.nbt` | 14×5×14 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
+| Farm di cactus (13 cactus) | `auto_cactus_farm.nbt` | 10×5×10 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
+| Farm di cactus (41 cactus) | `auto_cactus_farm_grande.nbt` | 14×5×14 | Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. Nessuna redstone. |
+| Pollaio automatico (8 galline) | `auto_egg_farm.nbt` | 19×3×4 | 8 galline, ognuna nella sua cella di vetro sopra una tramoggia: le uova cadono nella tramoggia e finiscono nella cassa (lanciale per avere nuovi polli). |
+| Pollaio automatico (24 galline) | `auto_egg_farm_grande.nbt` | 27×3×6 | 24 galline, ognuna nella sua cella di vetro sopra una tramoggia: le uova cadono nella tramoggia e finiscono nella cassa (lanciale per avere nuovi polli). |
+| Apiario automatico (4 arnie) | `auto_honey_farm.nbt` | 21×5×9 | 4 arnie con 3 api ciascuna davanti a un giardino fiorito chiuso: un comparatore legge il miele e, solo quando l'arnia e' piena, un dispenser la svuota con una bottiglia. Le bottiglie di miele restano nel dispenser (8 pile di bottiglie vuote incluse). |
+| Apiario automatico (8 arnie) | `auto_honey_farm_grande.nbt` | 41×5×9 | 8 arnie con 3 api ciascuna davanti a un giardino fiorito chiuso: un comparatore legge il miele e, solo quando l'arnia e' piena, un dispenser la svuota con una bottiglia. Le bottiglie di miele restano nel dispenser (8 pile di bottiglie vuote incluse). |
+| Compostiera automatica (6 compostiere) | `auto_composter_station.nbt` | 9×6×3 | Semi, foglie, canne e scarti delle farm nella cassa in alto: le tramogge riempiono 6 compostiere e la farina d'ossa finisce nella cassa davanti. |
+| Campo di grano con raccolta ad acqua (54 piante) | `auto_wheat_field.nbt` | 12×4×12 | 9 file di grano su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico). |
+| Campo di carote con raccolta ad acqua (54 piante) | `auto_carrots_field.nbt` | 12×4×12 | 9 file di carote su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico). |
+| Campo di patate con raccolta ad acqua (54 piante) | `auto_potatoes_field.nbt` | 12×4×12 | 9 file di patate su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico). |
+| Campo di barbabietole con raccolta ad acqua (54 piante) | `auto_beetroots_field.nbt` | 12×4×12 | 9 file di barbabietole su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta (semiautomatico). |
+| Magazzino smistatore dei minerali (9 barili) | `auto_sorter_minerali.nbt` | 33×7×6 | Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 9 barili con il nome; il resto finisce nel barile 'Altro'. |
+| Magazzino smistatore dei raccolti (9 barili) | `auto_sorter_farm.nbt` | 33×7×6 | Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 9 barili con il nome; il resto finisce nel barile 'Altro'. |
+| Magazzino smistatore dei bottini dei mob (7 barili) | `auto_sorter_mob.nbt` | 27×7×6 | Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di troppo pieno) li divide in 7 barili con il nome; il resto finisce nel barile 'Altro'. |
 
 Dettagli e prove in gioco: [docs/HUB_E_IRON_FARM.md](docs/HUB_E_IRON_FARM.md). Il prompt di progetto per i prossimi moduli è in [docs/PROMPT_ARCHITETTO.md](docs/PROMPT_ARCHITETTO.md).
 

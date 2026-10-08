@@ -404,7 +404,253 @@ def _cactus(size, th):
 for _name, _n, _th in (("auto_cactus_farm", 7, "pietra"), ("auto_cactus_farm_grande", 11, "legno")):
     def _make(n=_n, th=_th):
         return _cactus(n, th)
-    template(_name, f"Farm di cactus ({(_n * _n + 1) // 2} cactus)", "Farm automatiche",
+    template(_name, f"Farm di cactus ({((_n - 2) ** 2 + 1) // 2} cactus)", "Farm automatiche",
              "Cactus sulla sabbia a scacchiera sopra un pavimento di tramogge: crescendo toccano una "
              "staccionata e si spezzano, i pezzi cadono nelle tramogge e finiscono nella cassa. "
              "Nessuna redstone.")(_make)
+
+
+# ---------------------------------------------------------------------------
+# Eggs
+# ---------------------------------------------------------------------------
+
+def egg_farm(hens=8, rows=1, theme="legno"):
+    """
+    Hens in 1x1 glass cells (x odd), each standing on a hopper: the eggs fall in the hopper and the
+    hopper line carries them east, then down the collector column (x = 2N+1) to the chest outside.
+    Rows at z = 1, 3, ...; walls of glass between the rows, slab roof at y2.
+    """
+    t = THEMES[theme]
+    N = hens
+    end = 2 * N + 1
+    L = 2 * rows + 1
+    b = Builder(2 * N + 3, 3, L + 1)
+    for z in range(0, L, 2):
+        b.fill(0, 0, z, 2 * N, 0, z, t["wall"])
+        b.fill(0, 1, z, 2 * N, 1, z, "glass")
+    b.fill(end, 0, 0, end, 2, L - 1, t["wall"])
+    for r in range(rows):
+        z = 1 + 2 * r
+        for x in range(0, 2 * N + 1):
+            b.set(x, 0, z, "hopper", facing="east", enabled="true")
+            if x % 2 == 1:
+                b.mob(x, 1, z, "chicken", 90.0 * (x % 4))
+            else:
+                b.set(x, 1, z, "glass")
+        b.set(end, 0, z, "hopper", facing="south", enabled="true")
+        b.set(end, 0, z + 1, "hopper", facing="south", enabled="true")
+    b.fill(0, 2, 0, 2 * N, 2, L - 1, t["slab"], type="bottom", waterlogged="false")
+    _output_chest(b, end, L, "south", "Uova")
+    b.lantern(end - 1, 0, L)
+    b.technical_area(0, 0, 0, end, 2, L - 1)
+    return b
+
+
+for _name, _n, _r, _th in (("auto_egg_farm", 8, 1, "legno"), ("auto_egg_farm_grande", 12, 2, "pietra")):
+    def _make(n=_n, r=_r, th=_th):
+        return egg_farm(n, r, th)
+    template(_name, f"Pollaio automatico ({_n * _r} galline)", "Farm automatiche",
+             f"{_n * _r} galline, ognuna nella sua cella di vetro sopra una tramoggia: le uova cadono nella "
+             "tramoggia e finiscono nella cassa (lanciale per avere nuovi polli).")(_make)
+
+
+# ---------------------------------------------------------------------------
+# Honey
+# ---------------------------------------------------------------------------
+
+def honey_farm(hives=4, theme="legno"):
+    """
+    A row of beehives (x = 1 + 5k, z2) facing south on a closed flower garden with the bees. The
+    comparator C behind each hive reads its honey level into five dusts that lose one each: the last
+    one (d5) feeds the repeater R only when the level is 5 (full). R powers the block B next to the
+    dispenser D, which uses a glass bottle on the hive and keeps the honey bottle.
+      z0:  d1 d2 d3 d4      (y1, on blocks)
+      z1:  C  B  R  d5      (R facing east: input d5, output into B)
+      z2:  H  D             (D facing west into the hive)
+    No dust touches B or D, and 5 blocks between hives keep the circuits apart.
+    """
+    t = THEMES[theme]
+    W, L, H = 5 * hives + 1, 9, 5
+    b = Builder(W, H, L)
+    b.fill(0, 0, 0, W - 1, 0, 2, t["wall"])
+    # the garden: grass, flowers, glass walls and roof, a door
+    flowers = ("poppy", "dandelion", "cornflower", "allium", "oxeye_daisy", "azure_bluet", "lily_of_the_valley")
+    for x in range(W):
+        for z in range(3, L):
+            b.set(x, 0, z, "grass_block")
+            if (x * 7 + z * 3) % 4 == 0 and 3 < z < L - 1 and 0 < x < W - 1:
+                b.set(x, 1, z, flowers[(x + z) % len(flowers)])
+    b.walls(0, 1, 2, W - 1, 3, L - 1, "glass")
+    b.fill(0, 4, 2, W - 1, 4, L - 1, "glass")
+    _posts(b, 0, 2, W - 1, L - 1, 1, 3, t)
+    b.door(W // 2, 1, L - 1, "south", wood="spruce")
+    for k in range(hives):
+        x = 1 + 5 * k
+        b.set(x, 1, 2, "beehive", facing="south", honey_level="0")
+        b.set(x, 1, 1, "comparator", facing="south", mode="compare", powered="false")
+        for p in ((x, 1, 0), (x + 1, 1, 0), (x + 2, 1, 0), (x + 3, 1, 0), (x + 3, 1, 1)):
+            b.set(*p, "redstone_wire")
+        b.set(x + 2, 1, 1, "repeater", facing="east", delay="1", locked="false", powered="false")
+        b.set(x + 1, 1, 1, t["wall"])
+        b.set(x + 1, 1, 2, "dispenser", facing="west", triggered="false")
+        b.contents(x + 1, 1, 2, [("glass_bottle", 16)] * 8, name="Miele")
+        b.set(x + 2, 1, 2, t["wall"])
+        b.set(x, 2, 2, "glass")
+        b.set(x + 1, 2, 2, "glass")
+        for i in range(3):
+            b.mob(x + i % 2, 1, 4 + i, "bee", 180.0)
+    b.technical_area(0, 0, 0, W - 1, 2, 2)
+    return b
+
+
+for _name, _n, _th in (("auto_honey_farm", 4, "legno"), ("auto_honey_farm_grande", 8, "moderno")):
+    def _make(n=_n, th=_th):
+        return honey_farm(n, th)
+    template(_name, f"Apiario automatico ({_n} arnie)", "Farm automatiche",
+             f"{_n} arnie con 3 api ciascuna davanti a un giardino fiorito chiuso: un comparatore legge il "
+             "miele e, solo quando l'arnia e' piena, un dispenser la svuota con una bottiglia. Le bottiglie "
+             "di miele restano nel dispenser (8 pile di bottiglie vuote incluse).")(_make)
+
+
+# ---------------------------------------------------------------------------
+# Bone meal (composters)
+# ---------------------------------------------------------------------------
+
+def composter_station(n=6, theme="legno"):
+    """Like the smelter: compostable items spread over a row of composters, bone meal into a chest."""
+    t = THEMES[theme]
+    b = Builder(n + 3, 6, 3)
+    _posts(b, 0, 0, n + 1, 1, 0, 4, t)
+    for x in range(1, n + 1):
+        b.set(x, 0, 1, "hopper", facing="east", enabled="true")
+        b.set(x, 1, 1, "composter", level="0")
+        b.set(x, 2, 1, "hopper", facing="down", enabled="true")
+        b.set(x, 3, 1, "hopper", facing="east", enabled="true")
+        b.set(x, 4, 1, t["slab"], type="bottom", waterlogged="false")
+        b.fill(x, 0, 0, x, 3, 0, t["wall"])
+    b.fill(0, 0, 0, 0, 2, 1, t["wall"])
+    b.set(0, 3, 1, "hopper", facing="east", enabled="true")
+    b.chest(0, 4, 1, "west")
+    b.contents(0, 4, 1, [], name="Semi, foglie, scarti")
+    b.fill(n + 1, 1, 0, n + 1, 3, 1, t["wall"])
+    b.set(n + 1, 0, 0, t["wall"])
+    b.set(n + 1, 0, 1, "hopper", facing="south", enabled="true")
+    _output_chest(b, n + 1, 2, "south", "Farina d'ossa")
+    b.technical_area(0, 0, 0, n + 1, 4, 1)
+    return b
+
+
+template("auto_composter_station", "Compostiera automatica (6 compostiere)", "Farm automatiche",
+         "Semi, foglie, canne e scarti delle farm nella cassa in alto: le tramogge riempiono 6 compostiere "
+         "e la farina d'ossa finisce nella cassa davanti.")(lambda: composter_station(6, "legno"))
+
+
+# ---------------------------------------------------------------------------
+# Crop fields flushed by water (semi-automatic: replant by hand)
+# ---------------------------------------------------------------------------
+
+def crop_field(crop="wheat", rows=9, theme="legno"):
+    """
+    rows x 6 crops. A button powers the dust on top of a row of dispensers with water buckets (x1):
+    each places a source at x2 and the water runs over the field to x9 (7 blocks), breaking the crops
+    and carrying everything onto the hoppers at x9; a second press takes the water back. A water
+    source in the middle (x5) keeps the farmland wet.
+    """
+    t = THEMES[theme]
+    R = rows
+    b = Builder(12, 4, R + 3)
+    for z in (0, R + 1):
+        b.fill(1, 0, z, 10, 2, z, t["wall"])
+    for z in range(1, R + 1):
+        b.set(1, 0, z, t["wall"])
+        b.set(1, 1, z, "dispenser", facing="east", triggered="false")
+        b.contents(1, 1, z, [("water_bucket", 1)], name="Acqua")
+        b.set(1, 2, z, "redstone_wire")
+        for x in range(2, 9):
+            if x == 5:
+                b.set(x, 0, z, "water", level="0")
+            else:
+                b.set(x, 0, z, "farmland", moisture="7")
+                b.set(x, 1, z, crop, age="3" if crop == "beetroots" else "7")
+        b.set(9, 0, z, "hopper", facing="south", enabled="true")
+        b.fill(10, 0, z, 10, 1, z, t["wall"])
+    b.set(9, 0, R + 1, "hopper", facing="east", enabled="true")
+    _output_chest(b, 10, R + 1, "east", "Raccolto")
+    # the button on a post at the end of the dust line
+    b.set(1, 2, R + 1, "stone_button", face="floor", facing="north", powered="false")
+    b.lantern(0, 0, 0)
+    b.lantern(0, 0, R + 1)
+    b.technical_area(1, 0, 1, 9, 2, R)
+    return b
+
+
+_CROPS = (("wheat", "grano"), ("carrots", "carote"), ("potatoes", "patate"), ("beetroots", "barbabietole"))
+for _crop, _it in _CROPS:
+    def _make(crop=_crop):
+        return crop_field(crop, 9, "legno")
+    template(f"auto_{_crop}_field", f"Campo di {_it} con raccolta ad acqua (54 piante)", "Farm automatiche",
+             f"9 file di {_it} su terra arata bagnata: premi il pulsante e i dispenser versano l'acqua che "
+             "raccoglie tutto nelle tramogge e nella cassa; premilo ancora per ritirarla, poi ripianta "
+             "(semiautomatico).")(_make)
+
+
+# ---------------------------------------------------------------------------
+# Item sorter with storage (the hub's sorter, standalone)
+# ---------------------------------------------------------------------------
+
+def storage_sorter(items, theme="pietra"):
+    """
+    The hub's tested sorter slices in a row behind a wall of labelled barrels: what goes in the chest
+    on the left is sorted into the barrels, everything else ends in the overflow barrel on the right.
+    The filters are tuned for items that stack to 64 (eggs, pearls and the like would unlock them).
+    """
+    from templates.hub_farm import sorter_slice, SLICE_STEP
+    t = THEMES[theme]
+    n = len(items)
+    zf, x0 = 3, 3
+    W, L = x0 + SLICE_STEP * n + 3, zf + 3
+    b = Builder(W, 7, L)
+    b.fill(0, 0, 0, W - 1, 5, zf, t["wall"])
+    xs = [x0 + SLICE_STEP * k for k in range(n)]
+    b.sorter_slices = [sorter_slice(b, x, zf, 1, item, label, filler_block=t["wall"])
+                       for (item, label), x in zip(items, xs)]
+    end = xs[-1] + 2
+    for x in range(1, end):
+        b.set(x, 3, zf, "hopper", facing="east", enabled="true")
+    b.set(end, 3, zf, "hopper", facing="down", enabled="true")
+    b.set(end, 2, zf, "hopper", facing="down", enabled="true")
+    b.set(end, 1, zf, "hopper", facing="south", enabled="true")
+    b.set(end, 1, zf + 1, "barrel", facing="south", open="false")
+    b.contents(end, 1, zf + 1, [], name="Altro")
+    # input: a chest on top of the wall at the west end, over the first hopper of the chain
+    b.set(1, 4, zf, "chest", facing="south", type="single", waterlogged="false")
+    b.contents(1, 4, zf, [], name="Ingresso")
+    b.set(1, 5, zf, "air")
+    b.fill(0, 6, 0, W - 1, 6, zf, t["slab"], type="bottom", waterlogged="false")
+    b.set(1, 6, zf, "air")
+    b.lantern(0, 0, zf + 2)
+    b.lantern(W - 1, 0, zf + 2)
+    b.technical_area(0, 0, 0, W - 1, 5, zf)
+    return b
+
+
+_SORTS = {
+    "auto_sorter_minerali": ("Magazzino smistatore dei minerali", [
+        ("iron_ingot", "Ferro"), ("gold_ingot", "Oro"), ("copper_ingot", "Rame"), ("redstone", "Redstone"),
+        ("coal", "Carbone"), ("lapis_lazuli", "Lapislazzuli"), ("diamond", "Diamanti"), ("emerald", "Smeraldi"),
+        ("quartz", "Quarzo")]),
+    "auto_sorter_farm": ("Magazzino smistatore dei raccolti", [
+        ("sugar_cane", "Canna da zucchero"), ("bamboo", "Bambu'"), ("melon_slice", "Meloni"),
+        ("pumpkin", "Zucche"), ("cactus", "Cactus"), ("white_wool", "Lana"), ("potato", "Patate"),
+        ("wheat", "Grano"), ("bone_meal", "Farina d'ossa")]),
+    "auto_sorter_mob": ("Magazzino smistatore dei bottini dei mob", [
+        ("rotten_flesh", "Carne marcia"), ("bone", "Ossa"), ("arrow", "Frecce"), ("string", "Filo"),
+        ("gunpowder", "Polvere da sparo"), ("spider_eye", "Occhi di ragno"), ("phantom_membrane", "Membrane")]),
+}
+for _name, (_title, _items) in _SORTS.items():
+    def _make(items=_items):
+        return storage_sorter(items, "pietra")
+    template(_name, f"{_title} ({len(_items)} barili)", "Hub e magazzini",
+             f"Metti gli oggetti nella cassa in alto a sinistra: lo smistatore (lo stesso dell'hub, a prova di "
+             f"troppo pieno) li divide in {len(_items)} barili con il nome; il resto finisce nel barile "
+             "'Altro'.")(_make)
